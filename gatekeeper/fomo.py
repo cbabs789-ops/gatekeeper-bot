@@ -98,18 +98,18 @@ class Client:
         cap = int(float(config.os.environ.get("GK_FOMO_MONTHLY_CREDITS", "230000")))
         if self.credits_used() + credits > cap:
             raise RuntimeError("Monthly FOMO API credit cap reached (%d). Raise GK_FOMO_MONTHLY_CREDITS or wait for next month." % cap)
-        for attempt in range(3):
+        for attempt in range(4):
             async with self.s.get(API + path, params=params or {}, headers={"authorization": "Bearer " + key()},
                                   timeout=aiohttp.ClientTimeout(total=30)) as r:
-                if r.status == 429:
-                    await asyncio.sleep(5 * (attempt + 1))
+                if r.status in (429, 502, 503, 504):
+                    await asyncio.sleep(4 * (attempt + 1))
                     continue
                 body = await r.text()
                 if r.status != 200:
                     raise RuntimeError("FOMO API %s on %s: %s" % (r.status, path, body[:200]))
                 self._spend(credits)
                 return json.loads(body)
-        raise RuntimeError("FOMO API kept rate-limiting " + path)
+        raise RuntimeError("FOMO API busy, gave up after 4 tries")
 
 
 def _list_in(obj, *keys):
@@ -278,10 +278,12 @@ def scan_text(res):
         for name, t in th[:10]:
             wr = "%d%%" % round(t["wins"] / t["closed"] * 100) if t["closed"] else "n/a"
             L.append("%s: %d · %d · %s · %s · %s" % (name, len(t["traders"]), t["positions"], wr, money(t["pnl"]), money(t["open_pnl"])))
-    shared = [(k, v) for k, v in res["tokens"].items() if len(v["traders"]) >= 2]
+    base = {"WETH", "ETH", "SOL", "WSOL", "USDC", "USDT", "BNB", "WBNB", "MON", "WBTC", "BTC"}
+    shared = [(k, v) for k, v in res["tokens"].items() if len(v["traders"]) >= 2
+              and v["symbol"].upper() not in base and v["theme"] != "Tokenized stocks"]
     shared.sort(key=lambda kv: (len(kv[1]["traders"]), kv[1]["pnl"]), reverse=True)
     if shared:
-        L.append("\n<b>Coins several of them hold or traded</b>")
+        L.append("\n<b>Coins several of them hold or traded</b> (base coins and stock tokens left out)")
         for k, v in shared[:10]:
             L.append("$%s (%s, %s): %d traders, %d still open, combined %s" % (v["symbol"], v["theme"], v.get("chain") or "?", len(v["traders"]), v["open"], money(v["pnl"])))
     best = sorted(res["trader_pnl"].items(), key=lambda kv: kv[1], reverse=True)[:5]
