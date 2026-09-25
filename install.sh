@@ -32,30 +32,51 @@ python3 -m venv "$APP/.venv"
 "$APP/.venv/bin/pip" install -q -r "$APP/requirements.txt"
 
 say "4/5  Your keys (typed here, stored only on this server)"
-if [ ! -f "$ENVF" ]; then
+systemctl stop gatekeeper 2>/dev/null || true
+
+# Pasting into a web console can add invisible characters. Strip them.
+clean() { printf '%s' "$1" | sed -e 's/\x1b\[20[01]~//g' -e 's/\[20[01]~//g' | tr -cd 'A-Za-z0-9:_-'; }
+tg_ok() { curl -fsS -m 10 "https://api.telegram.org/bot$1/getMe" 2>/dev/null | grep -q '"ok":true'; }
+
+TG=""; HK=""
+if [ -f "$ENVF" ]; then
+  TG="$(clean "$(grep -m1 '^TELEGRAM_BOT_TOKEN=' "$ENVF" | cut -d= -f2- || true)")"
+  HK="$(clean "$(grep -m1 '^HELIUS_API_KEY=' "$ENVF" | cut -d= -f2- || true)")"
+  CHAT="$(grep -m1 '^TELEGRAM_CHAT_ID=' "$ENVF" | cut -d= -f2- || true)"
+fi
+while ! tg_ok "$TG"; do
+  [ -n "$TG" ] && echo "Telegram doesn't recognize that token (starts '${TG:0:6}', ${#TG} characters). A real one looks like 8123456789:AAH... and is about 46 characters."
   printf 'Paste your Telegram bot token, then press Enter: '
-  read -r TG < /dev/tty
-  printf 'Paste your Helius API key (or just press Enter to add it later): '
-  read -r HK < /dev/tty
-  umask 077
-  cat > "$ENVF" <<EOF
+  read -r RAW < /dev/tty
+  TG="$(clean "$RAW")"
+done
+BOTNAME="$(curl -fsS -m 10 "https://api.telegram.org/bot$TG/getMe" | sed -n 's/.*"username":"\([^"]*\)".*/\1/p')"
+echo "Token works. Connected to @$BOTNAME"
+if [ -z "$HK" ]; then
+  printf 'Paste your Helius API key (or just press Enter to skip for now): '
+  read -r RAW < /dev/tty
+  HK="$(clean "$RAW")"
+fi
+umask 077
+cat > "$ENVF" <<EOF
 # Gatekeeper settings. Edit with: gatekeeper config
 TELEGRAM_BOT_TOKEN=$TG
-TELEGRAM_CHAT_ID=
+TELEGRAM_CHAT_ID=${CHAT:-}
 HELIUS_API_KEY=$HK
 # Strategy overrides go here, for example:
 # GK_POSITION_USD=100
 # GK_STOP_LOSS_PCT=30
 EOF
-  chown root:gatekeeper "$ENVF"; chmod 640 "$ENVF"
-else
-  echo "Keeping your existing settings in $ENVF"
-fi
+chown root:gatekeeper "$ENVF"; chmod 640 "$ENVF"
 
 install -m 755 "$APP/gatekeeper.sh" /usr/local/bin/gatekeeper
 cd "$APP"
 if ! grep -q '^TELEGRAM_CHAT_ID=.\+' "$ENVF"; then
-  "$APP/.venv/bin/python" -m gatekeeper setup-telegram || true
+  until GATEKEEPER_ENV="$ENVF" "$APP/.venv/bin/python" -m gatekeeper setup-telegram; do
+    printf 'In Telegram, open @%s, send it "hi", then press Enter here to try again (or type skip): ' "$BOTNAME"
+    read -r ANS < /dev/tty
+    [ "$ANS" = "skip" ] && break
+  done
 fi
 
 say "5/5  Starting the bot"
