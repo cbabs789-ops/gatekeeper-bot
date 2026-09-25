@@ -99,6 +99,11 @@ def status_text(con, strats=None):
     if day:
         lines.append("Today: %s launches seen, %s graduated" % (format(day["created"], ","), format(day["graduated"], ",")))
     lines.append("Snapshots recorded (24h): %s" % format(snaps, ","))
+    if config.os.environ.get("FOMO_API_KEY"):
+        fl = con.execute("SELECT v FROM kv WHERE k='fomo_last_event'").fetchone()
+        fd = con.execute("SELECT v FROM kv WHERE k='fomo_feed_delay'").fetchone()
+        lines.append("Fomo feed: %s%s" % ("last trade %ds ago" % ((now - int(fl["v"])) // 1000) if fl else "waiting for first trade",
+                                          " (%ss delay)" % fd["v"] if fd and fd["v"] not in ("0", "0.0") else ""))
     rows = con.execute("SELECT * FROM trades WHERE mode='live' AND closed_at IS NULL ORDER BY opened_at").fetchall()
     if rows:
         lines.append("\n<b>Open paper trades</b>")

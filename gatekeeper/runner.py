@@ -8,7 +8,10 @@ from zoneinfo import ZoneInfo
 
 import aiohttp
 
-from . import config, db, notify, report
+import html
+import re
+
+from . import config, db, fomo, notify, report
 from .sources import dexscreener_batch, pair_to_snapshot, pumpportal_stream, rugcheck
 from .strategy import MIN, Position, Strategy
 
@@ -198,6 +201,59 @@ class Runner:
             if alert:
                 await notify.send(self.session, tag + notify.fmt_close(pos, a["spot"], a["reason"]))
 
+    # ------------------------------------------------------------ Fomo alerts
+    async def on_fomo_alert(self, kind, info):
+        addr, chain = info.get("address") or "", (info.get("chain") or "").lower()
+        buyers = sorted(info["buyers"].items(), key=lambda kv: -kv[1])
+        who = ", ".join("@%s (%s)" % (html.escape(h), notify.money(v)) for h, v in buyers[:6])
+        more = " +%d more" % (len(buyers) - 6) if len(buyers) > 6 else ""
+        if kind == "cluster":
+            head = "🔵 <b>FOMO CLUSTER: %d traders on your list bought $%s</b> in the last 30 min" % (len(buyers), html.escape(str(info["token"])))
+        else:
+            head = "🔥 <b>TRENDING ON FOMO: %d traders bought $%s</b> in the last 15 min (%s total)" % (
+                len(buyers), html.escape(str(info["token"])), notify.money(sum(v for _, v in buyers)))
+        lines = [head, "Buyers: " + who + more]
+        solana = chain in ("solana", "sol", "") and re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}", addr or "")
+        if solana:
+            saf = await rugcheck(self.session, addr)
+            pairs = await dexscreener_batch(self.session, [addr])
+            pair = pairs.get(addr)
+            fails = []
+            if saf:
+                if not saf["mint_revoked"]: fails.append("mint authority active")
+                if not saf["freeze_revoked"]: fails.append("freeze authority active")
+                if (saf["lp_locked"] or 0) < self.p["MIN_LP_LOCKED_PCT"]: fails.append("LP only %.0f%% locked" % (saf["lp_locked"] or 0))
+                if saf.get("top10") is not None and saf["top10"] > self.p["MAX_TOP10_PCT"]: fails.append("top 10 hold %.0f%%" % saf["top10"])
+                if saf.get("insiders") is not None and saf["insiders"] > self.p["MAX_INSIDERS"]: fails.append("%d insiders" % saf["insiders"])
+                if saf.get("danger"): fails.append(saf["danger"])
+                self.safety[addr] = dict(saf, mint=addr, checked_at=now_ms())
+            else:
+                fails.append("RugCheck unavailable")
+            if pair:
+                snap = pair_to_snapshot(addr, pair, now_ms())
+                if snap["liq"] < self.p["MIN_LIQ_USD"]: fails.append("pool only %s" % notify.money(snap["liq"]))
+                lines.append("Pool %s · mkt cap %s · 1h %s" % (notify.money(snap["liq"]), notify.money(snap["fdv"]),
+                                                              "%+.0f%%" % snap["pc_h1"] if snap["pc_h1"] is not None else "n/a"))
+                # start recording it so the paper traders and backtests see it too
+                if not self.con.execute("SELECT 1 FROM coins WHERE mint=?", (addr,)).fetchone():
+                    created = pair.get("pairCreatedAt") or now_ms()
+                    self.con.execute("INSERT INTO coins(mint, symbol, name, graduated_at, last_seen, status) VALUES(?,?,?,?,?,'watching')",
+                                     (addr, snap["_symbol"], snap["_name"], int(created), now_ms()))
+            lines.append(("✅ Passes safety" if not fails else "⛔ Fails safety: " + "; ".join(fails)))
+            lines.append(notify.dex_link(addr))
+        else:
+            lines.append("Chain: %s (safety checks only cover Solana)" % html.escape(chain or "unknown"))
+        lines.append("Following a crowd means you're buying after them. Check the chart before acting.")
+        await notify.send(self.session, "\n".join(lines))
+
+    async def run_scan(self):
+        await notify.send(self.session, "🔎 Running the Fomo trend scan (about 40 traders, roughly 10,000 of your 250,000 monthly credits). Takes a minute or two.")
+        try:
+            res = await fomo.trend_scan(self.session, self.con)
+            await notify.send(self.session, fomo.scan_text(res))
+        except Exception as e:  # noqa: BLE001
+            await notify.send(self.session, "Fomo scan failed: %s" % html.escape(str(e)[:300]))
+
     # ------------------------------------------------------------ telegram commands + daily summary
     async def telegram_loop(self):
         if not config.TELEGRAM_BOT_TOKEN:
@@ -219,8 +275,12 @@ class Runner:
                         await notify.send(self.session, report.period_text(self.con, hours=24 * 7))
                     elif cmd in ("/all", "all"):
                         await notify.send(self.session, report.period_text(self.con, hours=24 * 3650))
+                    elif cmd in ("/fomo", "fomo"):
+                        await notify.send(self.session, fomo.feed_report(self.con, 24))
+                    elif cmd in ("/scan", "scan"):
+                        asyncio.create_task(self.run_scan())
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)")
             except Exception as e:  # noqa: BLE001
                 log.warning("Telegram poll error: %s", e)
                 await asyncio.sleep(10)
@@ -232,11 +292,17 @@ class Runner:
             if now.hour == 21 and db.kv_get(self.con, "summary_sent") != key:
                 await notify.send(self.session, "📊 <b>Daily summary</b>\n" + report.period_text(self.con, hours=24, header=False))
                 db.kv_set(self.con, "summary_sent", key)
+                if fomo.key():
+                    await notify.send(self.session, fomo.feed_report(self.con, 24))
                 if now.weekday() == 6:
                     await notify.send(self.session, "🗓 <b>Weekly recap</b>\n" + report.period_text(self.con, hours=24 * 7, header=False))
+                    if fomo.key():
+                        await self.run_scan()
             if now.hour == 4 and db.kv_get(self.con, "pruned") != key:
                 keep = int(float(__import__("os").environ.get("GK_KEEP_DAYS", "90")))
                 self.con.execute("DELETE FROM snapshots WHERE ts < ?", (now_ms() - keep * 86400000,))
+                fomo.ensure_schema(self.con)
+                self.con.execute("DELETE FROM fomo_events WHERE ts < ?", (now_ms() - 30 * 86400000,))
                 db.kv_set(self.con, "pruned", key)
             await asyncio.sleep(60)
 
@@ -246,6 +312,7 @@ class Runner:
             await notify.send(session, "🤖 Gatekeeper bot started. Strategies: %s. %d open paper trades. Send /help for commands."
                               % (", ".join(self.strats), sum(len(s.positions) for s in self.strats.values())))
             await asyncio.gather(
+                fomo.Feed(self.con, self.on_fomo_alert).run(),
                 pumpportal_stream(self.on_event, config.PUMPPORTAL_API_KEY),
                 self.poll_loop(), self.safety_loop(), self.telegram_loop(), self.daily_loop())
 

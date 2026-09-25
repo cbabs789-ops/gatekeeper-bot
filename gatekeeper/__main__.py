@@ -78,6 +78,32 @@ async def _setup_telegram():
         return 0 if ok else 1
 
 
+async def _fomo(a):
+    import json as _json
+    import aiohttp
+    from . import fomo
+    if not fomo.key():
+        print("FOMO_API_KEY is missing. Add it with: gatekeeper config")
+        return 1
+    con = db.connect()
+    fomo.ensure_schema(con)
+    async with aiohttp.ClientSession() as s:
+        if a.what == "credits":
+            print("FOMO API credits used this month: %s of 250,000" % format(fomo.Client(s, con).credits_used(), ","))
+        elif a.what == "feed":
+            print(plain(fomo.feed_report(con, 24)))
+        elif a.what == "raw":
+            h = a.handle or "bigbabba"
+            c = fomo.Client(s, con)
+            for path in ("/v2/users/%s/positions" % h, "/v2/users/%s/following" % h):
+                r = await c.get(path)
+                print("== %s ==" % path)
+                print(_json.dumps(r, indent=1)[:2500])
+        else:
+            print(plain(fomo.scan_text(await fomo.trend_scan(s, con))))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(prog="gatekeeper")
     sub = ap.add_subparsers(dest="cmd")
@@ -93,6 +119,9 @@ def main():
     b.add_argument("--strategy", default="main", choices=sorted(config.PRESETS))
     sub.add_parser("setup-telegram")
     sub.add_parser("settings")
+    fm = sub.add_parser("fomo")
+    fm.add_argument("what", choices=["scan", "feed", "raw", "credits"])
+    fm.add_argument("handle", nargs="?")
     a = ap.parse_args()
 
     if a.cmd == "run":
@@ -107,6 +136,8 @@ def main():
         cmd_backtest(a)
     elif a.cmd == "setup-telegram":
         sys.exit(asyncio.run(_setup_telegram()))
+    elif a.cmd == "fomo":
+        sys.exit(asyncio.run(_fomo(a)))
     elif a.cmd == "settings":
         ps = {n: config.strategy_params(preset=n) for n in config.PRESETS}
         print("%-20s %s" % ("SETTING", "  ".join("%-10s" % n for n in ps)))

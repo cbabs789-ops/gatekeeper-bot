@@ -11,6 +11,8 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 5. **Two strategies side by side.** `main` (the strict rules above, sends alerts) and `wide` (looser: coins 10+ minutes old, 1.3x run-up, 10 to 45% pullback, $10K pool, top 10 up to 35%, up to 15 insiders; trades silently). Both paper trade the same coins so you can compare them daily.
 6. **Alerts and stats.** Telegram message on every `main` buy, partial sell and exit. Daily summary at 9pm Eastern with results per strategy and a coin funnel (launched, graduated, died, passed safety, traded), plus a weekly recap on Sundays. Send the bot `/status`, `/today`, `/week` or `/all`.
 
+7. **Fomo tracking** (needs `FOMO_API_KEY` from fomoapi.io, an unofficial service). Listens to the live Fomo trade feed (free) and alerts when 2+ traders on your list buy the same coin within 30 minutes (CLUSTER) or 5+ Fomo traders pile into one coin within 15 minutes (TRENDING). Solana coins get an instant safety check and are added to the recorder. `/fomo` in Telegram shows the last 24 hours by theme; `/scan` runs a full trend scan of your traders' positions (about 10,000 of the 250,000 free monthly credits). The list of traders is `GK_FOMO_TRADERS` in `gatekeeper config`.
+
 ## Install (fresh Ubuntu server, as root)
 
 ```
