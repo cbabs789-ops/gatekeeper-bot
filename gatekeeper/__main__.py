@@ -3,7 +3,7 @@
   run                       start the recorder and live paper trader (the service does this)
   status                    feed health and open paper trades
   report [--days N]         paper trading results
-  backtest [--days N] [--split] [--set NAME=VALUE ...] [--trades]
+  backtest [--days N] [--split] [--strategy main|wide] [--set NAME=VALUE ...] [--trades]
                             replay recorded history through the rules
   setup-telegram            find your chat and send a test message
   settings                  print every strategy setting and its current value
@@ -34,12 +34,12 @@ def cmd_backtest(a):
     if a.split:
         mid = since + (hi - since) // 2
         for label, s0, s1 in (("FIRST HALF (tune here)", since, mid), ("SECOND HALF (the honest test)", mid, hi + 1)):
-            strat, s, _ = backtest.run(con, s0, s1, overrides)
+            strat, s, _ = backtest.run(con, s0, s1, overrides, a.strategy)
             print("\n== %s ==" % label)
             print("\n".join(report.stats_lines(s)))
         print("\nIf the second half is much worse than the first, the rules are memorizing, not working.")
         return
-    strat, s, p = backtest.run(con, since, None, overrides)
+    strat, s, p = backtest.run(con, since, None, overrides, a.strategy)
     if overrides:
         print("Changed settings: " + ", ".join("%s=%s" % (k.upper(), p[k.upper()]) for k in overrides))
     print("\n".join(report.stats_lines(s)))
@@ -90,6 +90,7 @@ def main():
     b.add_argument("--split", action="store_true")
     b.add_argument("--set", action="append")
     b.add_argument("--trades", action="store_true")
+    b.add_argument("--strategy", default="main", choices=sorted(config.PRESETS))
     sub.add_parser("setup-telegram")
     sub.add_parser("settings")
     a = ap.parse_args()
@@ -107,8 +108,10 @@ def main():
     elif a.cmd == "setup-telegram":
         sys.exit(asyncio.run(_setup_telegram()))
     elif a.cmd == "settings":
-        for k, v in config.strategy_params().items():
-            print("%-20s %s" % (k, v))
+        ps = {n: config.strategy_params(preset=n) for n in config.PRESETS}
+        print("%-20s %s" % ("SETTING", "  ".join("%-10s" % n for n in ps)))
+        for k in config.STRATEGY_DEFAULTS:
+            print("%-20s %s" % (k, "  ".join("%-10s" % ps[n][k] for n in ps)))
     else:
         ap.print_help()
 

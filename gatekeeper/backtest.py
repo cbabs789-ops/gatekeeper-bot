@@ -5,8 +5,8 @@ from . import config
 from .strategy import Strategy, summarize
 
 
-def run(con, since_ms, until_ms=None, overrides=None):
-    p = config.strategy_params(overrides)
+def run(con, since_ms, until_ms=None, overrides=None, preset="main"):
+    p = config.strategy_params(overrides, preset)
     until_ms = until_ms or int(time.time() * 1000)
     safety = {r["mint"]: dict(r) for r in con.execute("SELECT * FROM safety")}
     coins = {r["mint"]: dict(r) for r in con.execute("SELECT * FROM coins")}

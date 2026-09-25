@@ -66,10 +66,25 @@ STRATEGY_DEFAULTS = {
 }
 
 
-def strategy_params(overrides=None):
+PRESETS = {
+    # the strict rules; sends Telegram alerts
+    "main": {},
+    # looser rules on the same coins; trades silently so it reaches 100 trades faster
+    "wide": {
+        "MIN_AGE_MIN": 10, "MIN_RUNUP_X": 1.3, "PULLBACK_MIN_PCT": 10, "PULLBACK_MAX_PCT": 45,
+        "PEAK_WITHIN_MIN": 60, "MIN_LIQ_USD": 10000, "MAX_TOP10_PCT": 35, "MAX_INSIDERS": 15,
+        "MIN_M5_TXNS": 6, "MAX_OPEN": 8,
+    },
+}
+ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main").split(",") if x.strip()]
+ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,wide").split(",") if x.strip() in PRESETS]
+
+
+def strategy_params(overrides=None, preset="main"):
     p = dict(STRATEGY_DEFAULTS)
+    p.update(PRESETS.get(preset, {}))
     for k, v in STRATEGY_DEFAULTS.items():
-        env = os.environ.get("GK_" + k)
+        env = os.environ.get("GK_" + ("%s_" % preset.upper() if preset != "main" else "") + k)
         if env is not None and env != "":
             p[k] = type(v)(float(env)) if isinstance(v, (int, float)) else env
     if overrides:
