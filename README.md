@@ -13,7 +13,7 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 ## Install (fresh Ubuntu server, as root)
 
 ```
-curl -fsSL https://raw.githubusercontent.com/__GITHUB_USER__/gatekeeper-bot/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/cbabs789-ops/gatekeeper-bot/main/install.sh | sudo bash
 ```
 
 It asks for your Telegram bot token and Helius key. They are stored only in `/etc/gatekeeper.env` on the server.

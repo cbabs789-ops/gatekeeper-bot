@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Gatekeeper installer for a fresh Ubuntu server.
-#   curl -fsSL https://raw.githubusercontent.com/__GITHUB_USER__/gatekeeper-bot/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/cbabs789-ops/gatekeeper-bot/main/install.sh | sudo bash
 set -euo pipefail
 
-REPO="https://github.com/__GITHUB_USER__/gatekeeper-bot.git"
+REPO="https://github.com/cbabs789-ops/gatekeeper-bot.git"
 APP=/opt/gatekeeper
 ENVF=/etc/gatekeeper.env
 
