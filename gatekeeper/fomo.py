@@ -68,7 +68,7 @@ THEMES = [
     ("Celebrities and internet people", r"kanye|ye\b|drake|taylor|swift|jeanphil|jean|phil|mrbeast|streamer|kai|speed|tate|diddy|snoop|rogan|ansem"),
     ("Social and viral trends", r"twitter|tweet|tiktok|insta|reddit|viral|meme|trend|attention|brainrot|stonk|sigma|rizz|npc|based|cope"),
     ("Holidays and seasons", r"halloween|oween|xmas|christmas|santa|thanksgiving|uptober|october|summer|winter|spooky|pumpkin"),
-    ("Chain and DeFi tokens", r"^(sol|eth|btc|wbtc|weth|usdc|usdt|jup|ray|op|arb|mon|monad|base|bnb|sui|hype|pump|lite)$|\b(swap|dex|stake|yield|lend|lending)\b"),
+    ("Chain and DeFi tokens", r"^(sol|eth|btc|wbtc|weth|usdc|usdt|jup|ray|op|arb|mon|monad|base|bnb|sui|hype)$|\b(swap|dex|stake|yield|lend|lending)\b"),
 ]
 
 
@@ -170,10 +170,11 @@ def parse_positions(resp):
                 "name": _first(p, "name", "tokenName", "token.name", default=""),
                 "address": _first(p, "address", "tokenAddress", "mint", "token.address", "token.mint", default=""),
                 "chain": str(_first(p, "chain", "token.chain", default="") or ""),
-                "status": status or ("closed" if _first(p, "closedAt", "exitAt", "closed", default=None) else "open"),
+                "status": status or str(_first(p, "status", default="") or "").lower() or ("closed" if _first(p, "closedAt", "exitAt", default=None) else "open"),
                 "realized": _num(_first(p, "realizedPnl", "realizedPnlUsd", "pnl.realized", "pnlUsd", "pnl")) or 0.0,
                 "unrealized": _num(_first(p, "unrealizedPnl", "unrealizedPnlUsd", "pnl.unrealized")) or 0.0,
-                "cost": _num(_first(p, "costBasis", "costUsd", "entryUsd", "invested", "boughtUsd")),
+                "cost": _num(_first(p, "costBasisUsd", "costBasis", "costUsd", "entryUsd", "invested", "boughtUsd")),
+                "thesis": _first(p, "thesis", default=None),
                 "opened": _first(p, "openedAt", "entryAt", "firstBuyAt", "createdAt"),
             })
     return out
@@ -226,9 +227,15 @@ def summarize_scan(per_trader, failures, notes, credits):
     themes = defaultdict(lambda: {"traders": set(), "positions": 0, "wins": 0, "closed": 0, "pnl": 0.0, "open_pnl": 0.0})
     tokens = defaultdict(lambda: {"traders": set(), "theme": "", "pnl": 0.0, "symbol": "", "open": 0})
     trader_pnl = {}
+    chains = defaultdict(lambda: {"positions": 0, "open": 0, "pnl": 0.0, "traders": set()})
     for h, rows in per_trader.items():
         tot = 0.0
         for r in rows:
+            ch = chains[(r["chain"] or "unknown").lower()]
+            ch["positions"] += 1
+            ch["open"] += 1 if r["status"] == "open" else 0
+            ch["pnl"] += r["realized"] + r["unrealized"]
+            ch["traders"].add(h)
             th = theme_of(r["symbol"], r["name"])
             t = themes[th]
             t["traders"].add(h)
@@ -242,12 +249,12 @@ def summarize_scan(per_trader, failures, notes, credits):
             k = r["address"] or r["symbol"]
             tk = tokens[k]
             tk["traders"].add(h)
-            tk["theme"], tk["symbol"] = th, r["symbol"]
+            tk["theme"], tk["symbol"], tk["chain"] = th, r["symbol"], r["chain"]
             tk["pnl"] += pnl
             tk["open"] += 1 if r["status"] == "open" else 0
             tot += pnl
         trader_pnl[h] = tot
-    return {"themes": themes, "tokens": tokens, "trader_pnl": trader_pnl, "failures": failures,
+    return {"themes": themes, "tokens": tokens, "trader_pnl": trader_pnl, "failures": failures, "chains": chains,
             "notes": notes, "credits": credits, "scanned": len(per_trader)}
 
 
@@ -258,6 +265,11 @@ def money(x):
 def scan_text(res):
     L = ["🔎 <b>Fomo trend scan</b>", "Traders scanned: %d" % res["scanned"]]
     L += res["notes"]
+    chs = sorted(res.get("chains", {}).items(), key=lambda kv: kv[1]["positions"], reverse=True)
+    if chs:
+        L.append("\n<b>Which chain they trade on</b> (positions · still open · profit incl. open)")
+        for name, c in chs[:6]:
+            L.append("%s: %d · %d · %s (%d traders)" % (name.title(), c["positions"], c["open"], money(c["pnl"]), len(c["traders"])))
     th = sorted(res["themes"].items(), key=lambda kv: (len(kv[1]["traders"]), kv[1]["positions"]), reverse=True)
     if th:
         top = th[0]
@@ -271,7 +283,7 @@ def scan_text(res):
     if shared:
         L.append("\n<b>Coins several of them hold or traded</b>")
         for k, v in shared[:10]:
-            L.append("$%s (%s): %d traders, %d still open, combined %s" % (v["symbol"], v["theme"], len(v["traders"]), v["open"], money(v["pnl"])))
+            L.append("$%s (%s, %s): %d traders, %d still open, combined %s" % (v["symbol"], v["theme"], v.get("chain") or "?", len(v["traders"]), v["open"], money(v["pnl"])))
     best = sorted(res["trader_pnl"].items(), key=lambda kv: kv[1], reverse=True)[:5]
     if best:
         L.append("\n<b>Best in this scan</b>")
