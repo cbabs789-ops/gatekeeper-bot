@@ -1,0 +1,16 @@
+[Unit]
+Description=Gatekeeper paper-trading bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=gatekeeper
+WorkingDirectory=/opt/gatekeeper
+Environment=GATEKEEPER_ENV=/etc/gatekeeper.env
+Environment=GATEKEEPER_DATA=/var/lib/gatekeeper
+ExecStart=/opt/gatekeeper/.venv/bin/python -m gatekeeper run
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
