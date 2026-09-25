@@ -12,6 +12,11 @@ say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 if [ "$(id -u)" -ne 0 ]; then echo "Run this as root (or with sudo)."; exit 1; fi
 
 say "1/5  Installing system packages"
+# Small servers ($4-6 plans) get a 1 GB swap file so installs and the bot don't run out of memory.
+if [ "$(awk '/MemTotal/{print $2}' /proc/meminfo)" -lt 1600000 ] && [ "$(swapon --show | wc -l)" -eq 0 ]; then
+  fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap -q /swapfile && swapon /swapfile \
+    && grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq python3 python3-venv git sqlite3 >/dev/null
