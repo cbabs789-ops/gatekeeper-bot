@@ -75,6 +75,7 @@ class Position:
     why: str = ""
     legs: list = field(default_factory=list)
     trade_id: int = None
+    max_liq: float = 0.0
 
 
 class Strategy:
@@ -213,6 +214,13 @@ class Strategy:
         self.traded.add(mint)
         return {"type": "buy", "pos": pos, "spot": cs.last_price, "liq": cs.last_liq}
 
+    def safety_exit(self, mint, reason, ts):
+        """Live re-check found new red flags while holding."""
+        pos, cs = self.positions.get(mint), self.coins.get(mint)
+        if not pos or not cs or not self.p.get("RECHECK_EXIT"):
+            return []
+        return self._close(pos, cs, max(ts, cs.last_ts), cs.last_price, cs.last_liq, "Safety changed: " + reason, panic=True)
+
     @staticmethod
     def leaders(pos):
         """Traders named in a position's reason, e.g. 'Fomo cluster: @a, @b' -> {'a', 'b'}."""
@@ -253,6 +261,21 @@ class Strategy:
             return self._close(pos, cs, ts, price, liq, "Stop loss")
         if (ts - pos.opened_at) / MIN >= p["MAX_HOLD_MIN"]:
             return self._close(pos, cs, ts, price, liq, "Time limit")
+        # --- in-trade protection ---
+        entry = pos.spot_at_entry
+        best = pos.peak_after / entry - 1 if entry else 0
+        pos.max_liq = max(pos.max_liq, liq)
+        if p.get("LIQ_DRAIN_PCT") and pos.max_liq and liq < pos.max_liq * (1 - p["LIQ_DRAIN_PCT"] / 100):
+            return self._close(pos, cs, ts, price, liq, "Pool draining (-%.0f%% from its high)" % ((1 - liq / pos.max_liq) * 100), panic=True)
+        if (p.get("SELL_PRESSURE_EXIT") and (s.get("sells_m5") or 0) >= 15 and (s.get("sells_m5") or 0) >= 2 * (s.get("buys_m5") or 0)
+                and price < pos.peak_after * 0.9):
+            return self._close(pos, cs, ts, price, liq, "Heavy selling (%s sells vs %s buys in 5 min)" % (s.get("sells_m5"), s.get("buys_m5")))
+        if p.get("BREAKEVEN_AT_PCT") and best * 100 >= p["BREAKEVEN_AT_PCT"]:
+            floor = entry * (1 + 2 * (p["FEE_PCT"] + p["PENALTY_PCT"]) / 100)
+            if price <= floor:
+                return self._close(pos, cs, ts, price, liq, "Protected gain (was up %.0f%%)" % (best * 100))
+        if p.get("LOCK_START_PCT") and best * 100 >= p["LOCK_START_PCT"] and price <= pos.peak_after * (1 - p["LOCK_TRAIL_PCT"] / 100):
+            return self._close(pos, cs, ts, price, liq, "Locked profit (was up %.0f%%)" % (best * 100))
         acts = []
         if not pos.took_half and price >= pos.spot_at_entry * p["TAKE_HALF_X"]:
             q = pos.qty_open / 2

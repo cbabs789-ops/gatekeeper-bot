@@ -29,6 +29,8 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 17. **Research report.** `/research` (and every Sunday): which coin themes rose after Fomo traders bought, whether coins with an X account, website or paid boost did better, and which safety warnings actually predicted dead coins.
 18. **Real vs paper.** After a real trade, `/fill SYMBOL PRICE` (price per coin, or market cap like `250k`) logs your fill next to the paper bot's. `/fills` shows how far real results run from paper.
 
+19. **In-trade protection.** While holding, the bot can lock in gains (trailing stop once up 20 to 30%), refuse to let a 25% gain turn into a loss, exit when sellers swamp buyers, and exit when the pool slowly drains. `/test` compares each one on newer coins. Separately, coins with an open trade get their safety re-checked every 10 minutes, and the bot exits if new red flags appear (mint or freeze turned on, LP unlocked, holders or insiders jumping).
+
 ## Install (fresh Ubuntu server, as root)
 
 ```

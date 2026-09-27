@@ -22,6 +22,18 @@ POLL_SEC = 30
 FAST_SEC = int(float(config.os.environ.get("GK_FAST_SEC", "10")))
 
 
+def safety_worse(old, new):
+    """Red flags that appeared since the last check on a coin we hold, or None."""
+    out = []
+    if old.get("mint_revoked") and not new.get("mint_revoked"): out.append("mint authority turned on")
+    if old.get("freeze_revoked") and not new.get("freeze_revoked"): out.append("freeze or blacklist turned on")
+    if new.get("danger") and new.get("danger") != old.get("danger"): out.append(str(new["danger"])[:80])
+    if (new.get("top10") or 0) >= (old.get("top10") or 0) + 10: out.append("top 10 holders jumped to %.0f%%" % new["top10"])
+    if not new.get("lp_na") and (old.get("lp_locked") or 0) >= 90 and (new.get("lp_locked") or 0) < 50: out.append("LP unlocked")
+    if (new.get("insiders") or 0) >= (old.get("insiders") or 0) + 10: out.append("insider wallets jumped to %d" % new["insiders"])
+    return "; ".join(out) or None
+
+
 def now_ms():
     return int(time.time() * 1000)
 
@@ -237,13 +249,20 @@ class Runner:
                     if (r["source"] != "fomo" and age < self.safety_min_age - 8) or (r["liq"] or 0) < self.safety_min_liq * 0.7:
                         continue
                     have = self.safety.get(r["mint"])
-                    if have and now - have["checked_at"] < 45 * MIN:
+                    holding = self.any_open(r["mint"])
+                    if have and now - have["checked_at"] < (10 if holding else 45) * MIN:
                         continue
                     res = await safety_check(self.session, r["chain"] or "solana", r["mint"])
                     if res:
                         res.update(mint=r["mint"], checked_at=now_ms())
+                        why = safety_worse(have, res) if holding and have else None
                         self.safety[r["mint"]] = res
                         db.save_safety(self.con, res)
+                        if why:
+                            log.info("Safety changed on %s: %s", r["mint"], why)
+                            for name, st in self.strats.items():
+                                for a in st.safety_exit(r["mint"], why, now_ms()):
+                                    await self.act(a, name)
                     await asyncio.sleep(2)
             except Exception:  # noqa: BLE001
                 log.exception("Safety loop error")
@@ -476,7 +495,7 @@ class Runner:
             await notify.send(self.session, "A rule test is already running. Results will show up here when it's done.")
             return
         self.sweeping = True
-        await notify.send(self.session, "🧪 Testing 17 rule variations on the last 7 days of recorded coins. This takes 10 to 30 minutes on the small server; alerts keep working meanwhile.")
+        await notify.send(self.session, "🧪 Testing %d rule variations on the last 7 days of recorded coins. This takes 10 to 30 minutes; alerts keep working meanwhile." % len(sweep.VARIANTS))
         try:
             res = await asyncio.to_thread(sweep.run, 7)
             await notify.send(self.session, sweep.text(res))
@@ -542,7 +561,7 @@ class Runner:
                     elif cmd in ("/sweep", "sweep", "/test", "test"):
                         asyncio.create_task(self.run_sweep())
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through 17 rule variations (10 to 30 min)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation, including in-trade protection (10 to 30 min)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)")
                     elif cmd.startswith("/"):
                         await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
             except Exception as e:  # noqa: BLE001

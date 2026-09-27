@@ -9,6 +9,8 @@ import time
 from . import config, db
 from .strategy import Strategy, summarize
 
+PROTECT = {"LOCK_START_PCT": 20, "LOCK_TRAIL_PCT": 20, "BREAKEVEN_AT_PCT": 25, "SELL_PRESSURE_EXIT": 1, "LIQ_DRAIN_PCT": 15}
+
 VARIANTS = [
     ("Current Main rules", {}),
     ("Only coins 60+ min old", {"MIN_AGE_MIN": 60}),
@@ -27,6 +29,15 @@ VARIANTS = [
     ("Skip devs with 3+ earlier coins", {"MAX_DEV_PREV_COINS": 2}),
     ("Skip devs with any dead earlier coin", {"MAX_DEV_DEAD_COINS": 0}),
     ("Current rules with zero trading costs (reference only)", {"FEE_PCT": 0, "PENALTY_PCT": 0, "PANIC_PENALTY_PCT": 0}),
+    # --- in-trade protection, tested on newer coins (the old Wide entries, the biggest sample) ---
+    ("New coins, old exits", {}, "wide"),
+    ("New coins + lock gains (trail 20% once up 20%)", {"LOCK_START_PCT": 20, "LOCK_TRAIL_PCT": 20}, "wide"),
+    ("New coins + lock gains (trail 15% once up 30%)", {"LOCK_START_PCT": 30, "LOCK_TRAIL_PCT": 15}, "wide"),
+    ("New coins + never give back a 25% gain", {"BREAKEVEN_AT_PCT": 25}, "wide"),
+    ("New coins + exit on heavy selling", {"SELL_PRESSURE_EXIT": 1}, "wide"),
+    ("New coins + exit if pool drains 15%", {"LIQ_DRAIN_PCT": 15}, "wide"),
+    ("New coins + all protections", PROTECT, "wide"),
+    ("Current Main + all protections", PROTECT),
 ]
 
 
@@ -36,8 +47,9 @@ def run(days=7, progress=None):
     coins = {r["mint"]: dict(r) for r in con.execute("SELECT * FROM coins")}
     look = lambda m: safety.get(m)  # noqa: E731
     strats = []
-    for label, ov in VARIANTS:
-        p = config.strategy_params(ov, "main")
+    for v in VARIANTS:
+        label, ov, preset = v if len(v) == 3 else (v[0], v[1], "main")
+        p = config.strategy_params(ov, preset)
         p["MAX_OPEN"] = 1000          # don't let open slots decide which trades a variant takes
         strats.append((label, Strategy(p, look)))
     since = int(time.time() * 1000) - days * 86400000

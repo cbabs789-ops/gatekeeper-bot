@@ -69,6 +69,13 @@ STRATEGY_DEFAULTS = {
     "ENTRY_MODE": "pullback",
     # signal strategies: 1 = sell as soon as a trader who got us in sells (tested in /testfollow)
     "SELL_WITH_TRADERS": 0,
+    # --- in-trade protection (0 = off; /test compares them) ---
+    "LOCK_START_PCT": 0,            # once up this much, a trailing stop starts protecting the gain
+    "LOCK_TRAIL_PCT": 20,           # ...sell if price falls this far from its best since entry
+    "BREAKEVEN_AT_PCT": 0,          # once up this much, never let it turn into a loss (stop moves to entry + costs)
+    "SELL_PRESSURE_EXIT": 0,        # 1 = exit when sellers swamp buyers (2x sells, 15+ sells in 5 min) and price is off its high
+    "LIQ_DRAIN_PCT": 0,             # exit if the pool shrinks this much from its biggest size since entry (slow rug)
+    "RECHECK_EXIT": 1,              # live only: re-run the safety check every 10 min while holding; exit on new red flags
 }
 
 
