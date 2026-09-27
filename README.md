@@ -31,6 +31,8 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 
 19. **In-trade protection.** While holding, the bot can lock in gains (trailing stop once up 20 to 30%), refuse to let a 25% gain turn into a loss, exit when sellers swamp buyers, and exit when the pool slowly drains. `/test` compares each one on newer coins. Separately, coins with an open trade get their safety re-checked every 10 minutes, and the bot exits if new red flags appear (mint or freeze turned on, LP unlocked, holders or insiders jumping).
 
+20. **Instant updates.** Every strategy sends a Telegram message the moment it buys, sells half or exits (set `GK_ALERT_STRATEGIES` to limit which). Open dashboards get each trade pushed instantly with a pop-up, instead of waiting for the next refresh.
+
 ## Install (fresh Ubuntu server, as root)
 
 ```

@@ -4,6 +4,7 @@ Read-only. Shows each strategy's profit and loss, open paper trades with live
 value, every buy and sell as it happens, and recent Fomo alerts. The key keeps
 strangers out; nothing on the page can change the bot.
 """
+import asyncio
 import hmac
 import json
 import logging
@@ -125,6 +126,21 @@ def state(runner):
     return out
 
 
+class Hub:
+    """Pushes each buy and sell to open dashboards the instant it happens."""
+    def __init__(self):
+        self.subs = set()
+
+    def publish(self, evt):
+        msg = json.dumps(evt)
+        for q in list(self.subs):
+            if q.qsize() < 100:
+                q.put_nowait(msg)
+
+
+HUB = Hub()
+
+
 def make_app(runner):
     key = web_key(runner.con)
 
@@ -148,8 +164,30 @@ def make_app(runner):
     async def icon(req):
         return web.Response(body=ICON, content_type="image/png", headers={"Cache-Control": "max-age=86400"})
 
+    async def stream(req):
+        if not authed(req):
+            return web.Response(status=403)
+        resp = web.StreamResponse(headers={"Content-Type": "text/event-stream", "Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+        await resp.prepare(req)
+        q = asyncio.Queue()
+        HUB.subs.add(q)
+        try:
+            await resp.write(b": hello\n\n")
+            while True:
+                try:
+                    msg = await asyncio.wait_for(q.get(), 20)
+                    await resp.write(("data: %s\n\n" % msg).encode())
+                except asyncio.TimeoutError:
+                    await resp.write(b": ping\n\n")      # keeps phones and proxies from dropping the connection
+        except (ConnectionResetError, asyncio.CancelledError, RuntimeError):
+            pass
+        finally:
+            HUB.subs.discard(q)
+        return resp
+
     app = web.Application()
     app.router.add_get("/", page)
+    app.router.add_get("/api/stream", stream)
     app.router.add_get("/icon.png", icon)
     app.router.add_get("/api/state", api)
     return app
@@ -194,6 +232,10 @@ svg{width:100%;height:70px;display:block;margin-top:8px}
 .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:760px){.cols{grid-template-columns:1fr}}
 .empty{color:var(--dim);font-size:13px;padding:8px 2px}
 footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
+#toasts{position:fixed;left:50%;transform:translateX(-50%);bottom:max(16px,env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:8px;z-index:9;width:min(92vw,440px)}
+.toast{background:#1f2630;border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:10px;padding:10px 14px;font-weight:600;box-shadow:0 6px 24px rgba(0,0,0,.5);animation:pop .25s ease-out}
+.toast.buy{border-left-color:var(--up)}.toast.close{border-left-color:var(--warn)}
+@keyframes pop{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 </style></head><body><div class="wrap">
 <header><h1>🤖 Gatekeeper Live</h1><span class="pill" id="health">connecting…</span></header>
 <div class="big" id="big"></div>
@@ -205,7 +247,8 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 <div><h2>Fomo alerts</h2><div class="list" id="alerts"></div></div>
 </div>
 <h2>Closed trades</h2><div class="list" id="closed"></div>
-<footer>Paper trading with fake money. Refreshes every 5 seconds. Open trades are priced every 10 seconds. Not financial advice.</footer>
+<footer>Paper trading with fake money. Buys and sells appear the instant they happen; prices refresh every 5 seconds. Not financial advice.</footer>
+<div id="toasts"></div>
 </div>
 <script>
 const K=new URLSearchParams(location.search).get("k")||"";
@@ -252,4 +295,11 @@ function render(s){
 async function load(){try{const r=await fetch("api/state?k="+encodeURIComponent(K),{cache:"no-store"});if(!r.ok)throw new Error(r.status);render(await r.json())}
  catch(e){$("health").replaceChildren(el("span","dot bad"),document.createTextNode("Can't reach the bot ("+e.message+"). Retrying…"))}}
 load();setInterval(load,5000);
+function toast(e){const t=el("div","toast "+e.type);const n=NAMES[e.strategy]||e.strategy;
+ t.textContent=e.type==="buy"?"🟢 "+n+" bought $"+e.symbol+" · "+money(e.usd):e.type==="partial"?"🟡 "+n+" sold half of $"+e.symbol+" · "+money(e.usd):
+  "🔴 "+n+" sold $"+e.symbol+" · "+(e.pnl!=null?sgn(e.pnl):"")+(e.reason?" · "+e.reason:"");
+ $("toasts").prepend(t);setTimeout(()=>t.remove(),12000);try{navigator.vibrate&&navigator.vibrate(120)}catch(_){}}
+function live(){try{const es=new EventSource("api/stream?k="+encodeURIComponent(K));
+ es.onmessage=m=>{try{toast(JSON.parse(m.data))}catch(_){}load()};es.onerror=()=>{es.close();setTimeout(live,5000)}}catch(_){}}
+live();
 </script></body></html>"""

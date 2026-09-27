@@ -290,6 +290,13 @@ class Runner:
                              (pos.closed_at, pos.proceeds, pos.pnl_usd, pos.pnl_pct, pos.exit_reason, json.dumps(pos.legs), pos.trade_id))
             if alert:
                 await notify.send(self.session, tag + notify.fmt_close(pos, a["spot"], a["reason"]))
+        try:
+            web.HUB.publish({"type": a["type"], "strategy": name, "symbol": pos.symbol,
+                             "usd": round(a.get("usd") or (pos.size_usd if a["type"] == "buy" else pos.proceeds), 2),
+                             "pnl": round(pos.pnl_usd, 2) if a["type"] == "close" and pos.pnl_usd is not None else None,
+                             "reason": a.get("reason") or ""})
+        except Exception:  # noqa: BLE001
+            log.exception("dashboard push")
 
     # ------------------------------------------------------------ Fomo alerts
     async def on_fomo_alert(self, kind, info):

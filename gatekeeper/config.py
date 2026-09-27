@@ -91,7 +91,7 @@ PRESETS = {
     # buys when 2+ of your Fomo traders buy the same coin and it passes safety; same exits
     "follow": {"ENTRY_MODE": "signal", "MAX_OPEN": 8, "MIN_LIQ_USD": 10000, "MAX_TOP10_PCT": 35},
 }
-ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main").split(",") if x.strip()]
+ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main,wide,follow").split(",") if x.strip()]
 ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,wide,follow").split(",") if x.strip() in PRESETS]
 
 
