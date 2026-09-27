@@ -1,5 +1,6 @@
 """The always-on service: recorder + live paper trader + Telegram."""
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -18,6 +19,7 @@ from .strategy import MIN, Position, Strategy
 log = logging.getLogger("gatekeeper")
 TZ = ZoneInfo(config.TIMEZONE)
 POLL_SEC = 30
+FAST_SEC = int(float(config.os.environ.get("GK_FAST_SEC", "10")))
 
 
 def now_ms():
@@ -45,8 +47,26 @@ class Runner:
         self.last_liq = {}
         self.sweeping = False
         self.tracking = set()
+        self.epochs = {}
+        for name, st in self.strats.items():
+            self._epoch(name, st)
         for name, st in self.strats.items():
             self._restore(name, st)
+
+    def _epoch(self, name, st):
+        """When a strategy's rules last changed, so results can be shown for the current rules only."""
+        h = hashlib.sha1(json.dumps(st.p, sort_keys=True, default=str).encode()).hexdigest()[:12]
+        old, ep = db.kv_get(self.con, "rules_hash_" + name), db.kv_get(self.con, "rules_since_" + name)
+        if old is None:
+            # first run with this feature: rules customized in the config file count as changed now
+            pre = "GK_" + ("%s_" % name.upper() if name != "main" else "")
+            custom = any(config.os.environ.get(pre + k) not in (None, "") for k in config.STRATEGY_DEFAULTS)
+            ep = now_ms() if custom else 0
+        elif old != h:
+            ep = now_ms()
+        db.kv_set(self.con, "rules_hash_" + name, h)
+        db.kv_set(self.con, "rules_since_" + name, int(float(ep or 0)))
+        self.epochs[name] = int(float(ep or 0))
 
     def any_open(self, mint):
         return any(mint in st.positions for st in self.strats.values())
@@ -168,6 +188,39 @@ class Runner:
                 st.prune(now, 30 * MIN)
         db.kv_set(self.con, "last_poll", now)
         db.kv_set(self.con, "watching", len(mints))
+
+    async def fast_loop(self):
+        """Price coins with open paper trades every 10 seconds, so exits and live P/L are sharper."""
+        while True:
+            await asyncio.sleep(FAST_SEC)
+            try:
+                mints = {m for st in self.strats.values() for m in st.positions}
+                if not mints:
+                    continue
+                now = now_ms()
+                coins = {r["mint"]: dict(r) for r in self.con.execute(
+                    "SELECT * FROM coins WHERE mint IN (%s)" % ",".join("?" * len(mints)), list(mints))}
+                for chain in CHAINS:
+                    batch = [m for m in mints if m in coins and (coins[m].get("chain") or "solana") == chain]
+                    if not batch:
+                        continue
+                    for mint, pair in (await dexscreener_batch(self.session, batch[:30], chain)).items():
+                        if mint not in coins:
+                            continue
+                        snap = pair_to_snapshot(mint, pair, now)
+                        if not snap["price"]:
+                            continue
+                        self.last_liq[mint] = snap["liq"]
+                        self.con.execute("INSERT INTO snapshots VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                         (mint, now, snap["price"], snap["liq"], snap["fdv"], snap["vol_m5"], snap["vol_h1"],
+                                          snap["buys_m5"], snap["sells_m5"], snap["buys_h1"], snap["sells_h1"], snap["pc_m5"], snap["pc_h1"]))
+                        for name, st in self.strats.items():
+                            if mint in st.positions:
+                                for a in st.on_snapshot(dict(snap), coins[mint]):
+                                    await self.act(a, name)
+                db.kv_set(self.con, "last_fast_poll", now)
+            except Exception:  # noqa: BLE001
+                log.exception("Fast price loop failed")
 
     # ------------------------------------------------------------ safety checks
     async def safety_loop(self):
@@ -369,6 +422,13 @@ class Runner:
                         asyncio.create_task(self.run_scan())
                     elif cmd in ("/traders", "traders", "/scorecard"):
                         await notify.send(self.session, fomo.scorecard_text(self.con))
+                    elif cmd in ("/reset", "reset"):
+                        parts = (msg.get("text") or "").split()
+                        which = [w.lower() for w in parts[1:] if w.lower() in self.strats] or list(self.strats)
+                        for w in which:
+                            self.epochs[w] = now_ms()
+                            db.kv_set(self.con, "rules_since_" + w, self.epochs[w])
+                        await notify.send(self.session, "🔄 Fresh start for %s. Dashboard P/L now counts from this moment. All-time history is kept." % ", ".join(which))
                     elif cmd in ("/site", "site", "/dashboard", "/live"):
                         url = await web.public_url(self.session, self.con)
                         await notify.send(self.session, "📺 Live dashboard (keep this link private):\n%s\n\nIf it won't load, the server firewall may block port %d. Run in the console: ufw allow %d" % (html.escape(url), web.PORT, web.PORT))
@@ -377,7 +437,7 @@ class Runner:
                     elif cmd in ("/sweep", "sweep", "/test", "test"):
                         asyncio.create_task(self.run_sweep())
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through 17 rule variations (10 to 30 min)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through 17 rule variations (10 to 30 min)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)")
                     elif cmd.startswith("/"):
                         await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
             except Exception as e:  # noqa: BLE001
@@ -421,7 +481,7 @@ class Runner:
             await asyncio.gather(
                 fomo.Feed(self.con, self.on_fomo_alert, self.track_coin).run(),
                 pumpportal_stream(self.on_event, config.PUMPPORTAL_API_KEY),
-                self.poll_loop(), self.safety_loop(), self.telegram_loop(), self.daily_loop(), self.scorecard_loop())
+                self.poll_loop(), self.fast_loop(), self.safety_loop(), self.telegram_loop(), self.daily_loop(), self.scorecard_loop())
 
 
 def main():

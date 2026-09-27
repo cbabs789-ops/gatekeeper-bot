@@ -93,6 +93,8 @@ class Strategy:
         if not s.get("price") or not s.get("liq"):
             return []
         cs = self.coins.get(s["mint"])
+        if cs is not None and s["ts"] <= cs.last_ts:
+            return []                        # older than what we already have (two price loops overlapping)
         if cs is None:
             cs = CoinState(s["mint"], coin.get("symbol") or s["mint"][:6], coin.get("graduated_at") or s["ts"],
                            coin.get("grad_price") or s["price"])

@@ -65,12 +65,14 @@ def state(runner):
             return None
 
     out = {"now": now, "health": {"last_poll_s": ago(kv("last_poll")), "watching": kv("watching"),
-                                  "fomo_last_s": ago(kv("fomo_last_event")), "fomo_delay_s": kv("fomo_feed_delay")},
+                                  "fomo_last_s": ago(kv("fomo_last_event")), "fast_s": ago(kv("last_fast_poll")), "fomo_delay_s": kv("fomo_feed_delay")},
            "strategies": [], "open": [], "closed": [], "activity": [], "alerts": [], "equity": {}}
 
     for name, st in runner.strats.items():
+        since = getattr(runner, "epochs", {}).get(name, 0)
         closed = report._closed(con, strategy=name)
-        today = report._closed(con, since_ms=day_start, strategy=name)
+        current = report._closed(con, since_ms=since, strategy=name) if since else closed
+        today = report._closed(con, since_ms=max(day_start, since), strategy=name)
         unreal = 0.0
         for mint, pos in st.positions.items():
             cs = st.coins.get(mint)
@@ -86,10 +88,11 @@ def state(runner):
                 "stop_at": round(pos.spot_at_entry * (1 - st.p["STOP_LOSS_PCT"] / 100), 12)})
         out["strategies"].append({
             "name": name, "label": report.LABEL.get(name, name), "alerts": name in config.ALERT_PRESETS,
-            "all": _stats(closed), "today": _stats(today), "open": len(st.positions), "unrealized": round(unreal, 2)})
+            "all": _stats(closed), "current": _stats(current), "since": since, "today": _stats(today),
+            "open": len(st.positions), "unrealized": round(unreal, 2)})
         eq, pts = 0.0, []
         for r in con.execute("SELECT closed_at, pnl_usd FROM trades WHERE mode='live' AND closed_at IS NOT NULL "
-                             "AND COALESCE(run_id,'main')=? ORDER BY closed_at", (name,)):
+                             "AND COALESCE(run_id,'main')=? AND closed_at>=? ORDER BY closed_at", (name, since)):
             eq += r["pnl_usd"] or 0
             pts.append([r["closed_at"], round(eq, 2)])
         step = max(1, len(pts) // 300)
@@ -192,7 +195,7 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 <div><h2>Fomo alerts</h2><div class="list" id="alerts"></div></div>
 </div>
 <h2>Closed trades</h2><div class="list" id="closed"></div>
-<footer>Paper trading with fake money. Refreshes every 10 seconds. Not financial advice.</footer>
+<footer>Paper trading with fake money. Refreshes every 5 seconds. Open trades are priced every 10 seconds. Not financial advice.</footer>
 </div>
 <script>
 const K=new URLSearchParams(location.search).get("k")||"";
@@ -215,13 +218,14 @@ function spark(pts){const ns="http://www.w3.org/2000/svg",s=document.createEleme
 function stat(k,v,c){const d=el("div","card");d.append(el("div","k",k),el("div","v "+(c||""),v));return d}
 function render(s){
  const h=s.health,ok=h.last_poll_s!=null&&h.last_poll_s<120;
- $("health").replaceChildren(el("span","dot"+(ok?"":" bad")),document.createTextNode((ok?"Live":"Price feed stalled")+" · last price check "+(h.last_poll_s??"?")+"s ago · "+(h.watching??"?")+" coins watched · Fomo "+(h.fomo_last_s!=null?h.fomo_last_s+"s ago":"off")));
- let all=0,today=0,unr=0,open=0;s.strategies.forEach(x=>{all+=x.all.pnl;today+=x.today.pnl;unr+=x.unrealized;open+=x.open});
- $("big").replaceChildren(stat("Closed P/L, all strategies",sgn(all),cls(all)),stat("Closed P/L today",sgn(today),cls(today)),stat("Open trades P/L now",sgn(unr),cls(unr)),stat("Open trades",String(open)));
+ $("health").replaceChildren(el("span","dot"+(ok?"":" bad")),document.createTextNode((ok?"Live":"Price feed stalled")+" · last price check "+(h.last_poll_s??"?")+"s ago · "+(h.watching??"?")+" coins watched · open trades priced "+(h.fast_s!=null?h.fast_s+"s ago":"every 30s")+" · Fomo "+(h.fomo_last_s!=null?h.fomo_last_s+"s ago":"off")));
+ let all=0,today=0,unr=0,open=0;s.strategies.forEach(x=>{all+=x.current.pnl;today+=x.today.pnl;unr+=x.unrealized;open+=x.open});
+ $("big").replaceChildren(stat("Closed P/L, current rules",sgn(all),cls(all)),stat("Closed P/L today",sgn(today),cls(today)),stat("Open trades P/L now",sgn(unr),cls(unr)),stat("Open trades",String(open)));
  $("strats").replaceChildren(...s.strategies.map(x=>{const c=el("div","card");const top=el("div","srow");const n=el("b",null,x.label);if(x.alerts)n.append(el("span","tag","alerts on"));
-  top.append(n,el("b",cls(x.all.pnl),sgn(x.all.pnl)));c.append(top);
+  top.append(n,el("b",cls(x.current.pnl),sgn(x.current.pnl)));c.append(top);
   const r=(a,b)=>{const d=el("div","srow");d.append(el("span","dim",a),el("span",null,b));c.append(d)};
-  r("All time",x.all.trades+" trades · "+x.all.win_rate+"% win");r("Today",x.today.trades+" trades · "+sgn(x.today.pnl));r("Open now",x.open+" · "+sgn(x.unrealized));
+  r(x.since?"Since rules changed "+t(x.since):"All time",x.current.trades+" trades · "+x.current.win_rate+"% win");
+  if(x.since&&x.all.trades>x.current.trades)r("All time, incl. old rules",x.all.trades+" trades · "+sgn(x.all.pnl));r("Today",x.today.trades+" trades · "+sgn(x.today.pnl));r("Open now",x.open+" · "+sgn(x.unrealized));
   c.append(spark(s.equity[x.name]));return c}));
  const o=s.open.sort((a,b)=>b.opened_at-a.opened_at);
  $("open").replaceChildren(...(o.length?o.map(p=>{const d=el("div","item");const n=link("$"+p.symbol,p.link);const w=el("div");w.append(n,el("span","tag",NAMES[p.strategy]||p.strategy));if(p.took_half)w.append(el("span","tag","sold half"));
@@ -237,5 +241,5 @@ function render(s){
 }
 async function load(){try{const r=await fetch("api/state?k="+encodeURIComponent(K),{cache:"no-store"});if(!r.ok)throw new Error(r.status);render(await r.json())}
  catch(e){$("health").replaceChildren(el("span","dot bad"),document.createTextNode("Can't reach the bot ("+e.message+"). Retrying…"))}}
-load();setInterval(load,10000);
+load();setInterval(load,5000);
 </script></body></html>"""

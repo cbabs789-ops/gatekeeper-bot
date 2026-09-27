@@ -23,7 +23,7 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 
 14. **Follow test.** `/testfollow` in Telegram (or `gatekeeper followtest`) replays the stored Fomo feed: when would each Follow rule have bought (2+ or 3+ of your traders, any 1 trader, $1K+ buys, waiting 10 or 30 minutes, trending crowds) and how would the same exits have done, split into first and second half. Every coin a trader on your list buys is now price-tracked for 12 hours so this test has data. Runs with the Sunday recap too.
 
-15. **Live dashboard.** The bot serves a read-only web page at `http://<server-ip>:8080/?k=<key>`: profit and loss per strategy with equity curves, open paper trades valued at what they'd sell for right now, every buy and sell as it happens, Fomo alerts and closed trades. Refreshes every 10 seconds. Send `/site` in Telegram for your link. Set `GK_WEB_PORT` or `GK_WEB_KEY` in `gatekeeper config` to change the port or key.
+15. **Live dashboard.** The bot serves a read-only web page at `http://<server-ip>:8080/?k=<key>`: profit and loss per strategy with equity curves, open paper trades valued at what they'd sell for right now, every buy and sell as it happens, Fomo alerts and closed trades. Refreshes every 10 seconds. Send `/site` in Telegram for your link. P/L counts from the last time a strategy's rules changed (detected automatically; `/reset main` starts a fresh count by hand, history is kept). Coins with open paper trades are priced every 10 seconds instead of 30. Set `GK_WEB_PORT` or `GK_WEB_KEY` in `gatekeeper config` to change the port or key.
 
 ## Install (fresh Ubuntu server, as root)
 
