@@ -368,7 +368,7 @@ async function load(){try{const r=await fetch("api/state?k="+encodeURIComponent(
  catch(e){$("health").replaceChildren(el("span","dot bad"),document.createTextNode("Can't reach the bot ("+e.message+"). Retrying…"))}}
 load();setInterval(load,5000);
 function toast(e){const t=el("div","toast "+e.type);const n=NAMES[e.strategy]||e.strategy;
- t.textContent=e.type==="buy"?"🟢 "+n+" bought $"+e.symbol+" · "+money(e.usd):e.type==="partial"?"🟡 "+n+" sold half of $"+e.symbol+" · "+money(e.usd):
+ t.textContent=e.type==="buy"?"🟢 "+n+" bought $"+e.symbol+" · "+money(e.usd):e.type==="partial"?((e.reason||"").includes("moonbag")?"🌙 "+n+" took profit on $"+e.symbol+", kept a moonbag · ":"🟡 "+n+" sold half of $"+e.symbol+" · ")+money(e.usd):
   "🔴 "+n+" sold $"+e.symbol+" · "+(e.pnl!=null?sgn(e.pnl):"")+(e.reason?" · "+e.reason:"");
  $("toasts").prepend(t);setTimeout(()=>t.remove(),12000);try{navigator.vibrate&&navigator.vibrate(120)}catch(_){}}
 function live(){try{const es=new EventSource("api/stream?k="+encodeURIComponent(K));

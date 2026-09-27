@@ -28,6 +28,7 @@ VARIANTS = [
     ("2+ traders, pool $50K+", {"sig": "list", "n": 2}, {"MIN_LIQ_USD": 50000}),
     ("2+ traders, sell when the first of them sells", {"sig": "list", "n": 2}, {"SELL_WITH_TRADERS": 1}),
     ("Any 1 trader, sell when they sell", {"sig": "list", "n": 1}, {"SELL_WITH_TRADERS": 1}),
+    ("2+ traders + 20% moonbag", {"sig": "list", "n": 2}, {"MOONBAG_PCT": 20}),
     ("2+ traders, no safety check (reference only)", {"sig": "list", "n": 2, "no_safety": True}, {}),
     ("2+ traders, zero trading costs (reference only)", {"sig": "list", "n": 2}, {"FEE_PCT": 0, "PENALTY_PCT": 0, "PANIC_PENALTY_PCT": 0}),
 ]

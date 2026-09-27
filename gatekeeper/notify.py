@@ -44,7 +44,10 @@ def fmt_buy(pos, spot, liq, p=None):
         liq=format(int(liq), ","), why=html.escape(pos.why), link=dex_link(pos.mint))
 
 
-def fmt_partial(pos, spot, usd):
+def fmt_partial(pos, spot, usd, why=None):
+    if why and "moonbag" in why:
+        return "🌙 <b>Took profit on ${}</b> at {} · locked {}\n{}. The moonbag rides until it falls far from its high. {}".format(
+            html.escape(pos.symbol), price(spot), money(usd), html.escape(why), dex_link(pos.mint))
     return "🟡 <b>Took half on ${}</b> at {} · locked {}\nRest rides with a trailing stop. {}".format(
         html.escape(pos.symbol), price(spot), money(usd), dex_link(pos.mint))
 

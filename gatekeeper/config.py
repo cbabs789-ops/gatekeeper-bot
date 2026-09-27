@@ -76,6 +76,10 @@ STRATEGY_DEFAULTS = {
     "SELL_PRESSURE_EXIT": 0,        # 1 = exit when sellers swamp buyers (2x sells, 15+ sells in 5 min) and price is off its high
     "LIQ_DRAIN_PCT": 0,             # exit if the pool shrinks this much from its biggest size since entry (slow rug)
     "RECHECK_EXIT": 1,              # live only: re-run the safety check every 10 min while holding; exit on new red flags
+    # --- moonbag: after taking profit, keep a small slice to catch the rare huge runner ---
+    "MOONBAG_PCT": 0,               # % of the original position kept when the rest is sold (0 = off)
+    "MOON_TRAIL_PCT": 50,           # the moonbag sells only if price falls this far from its best
+    "MOON_MAX_HOURS": 72,           # ...or after this long
 }
 
 

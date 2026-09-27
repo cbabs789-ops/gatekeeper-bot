@@ -76,6 +76,7 @@ class Position:
     legs: list = field(default_factory=list)
     trade_id: int = None
     max_liq: float = 0.0
+    moon: bool = False
 
 
 class Strategy:
@@ -257,10 +258,16 @@ class Strategy:
         ref = cs.at_or_after(ts - 5 * MIN)
         if ref and ref[0] < ts and ref[2] > 0 and liq < ref[2] * (1 - p["LIQ_PULL_PCT"] / 100):
             return self._close(pos, cs, ts, price, liq, "Liquidity pulled (-%.0f%% in 5 min)" % ((1 - liq / ref[2]) * 100), panic=True)
+        if pos.moon:
+            if price <= pos.peak_after * (1 - p["MOON_TRAIL_PCT"] / 100):
+                return self._close(pos, cs, ts, price, liq, "Moonbag trailing stop (peak was %.1fx)" % (pos.peak_after / pos.spot_at_entry))
+            if (ts - pos.opened_at) / MIN >= p["MOON_MAX_HOURS"] * 60:
+                return self._close(pos, cs, ts, price, liq, "Moonbag time limit (%.1fx)" % (price / pos.spot_at_entry))
+            return []
         if price <= pos.spot_at_entry * (1 - p["STOP_LOSS_PCT"] / 100):
             return self._close(pos, cs, ts, price, liq, "Stop loss")
         if (ts - pos.opened_at) / MIN >= p["MAX_HOLD_MIN"]:
-            return self._close(pos, cs, ts, price, liq, "Time limit")
+            return self._core_exit(pos, cs, ts, price, liq, "Time limit")
         # --- in-trade protection ---
         entry = pos.spot_at_entry
         best = pos.peak_after / entry - 1 if entry else 0
@@ -273,9 +280,9 @@ class Strategy:
         if p.get("BREAKEVEN_AT_PCT") and best * 100 >= p["BREAKEVEN_AT_PCT"]:
             floor = entry * (1 + 2 * (p["FEE_PCT"] + p["PENALTY_PCT"]) / 100)
             if price <= floor:
-                return self._close(pos, cs, ts, price, liq, "Protected gain (was up %.0f%%)" % (best * 100))
+                return self._core_exit(pos, cs, ts, price, liq, "Protected gain (was up %.0f%%)" % (best * 100))
         if p.get("LOCK_START_PCT") and best * 100 >= p["LOCK_START_PCT"] and price <= pos.peak_after * (1 - p["LOCK_TRAIL_PCT"] / 100):
-            return self._close(pos, cs, ts, price, liq, "Locked profit (was up %.0f%%)" % (best * 100))
+            return self._core_exit(pos, cs, ts, price, liq, "Locked profit (was up %.0f%%)" % (best * 100))
         acts = []
         if not pos.took_half and price >= pos.spot_at_entry * p["TAKE_HALF_X"]:
             q = pos.qty_open / 2
@@ -283,14 +290,28 @@ class Strategy:
             pos.qty_open -= q
             pos.proceeds += got
             pos.took_half = True
-            pos.legs.append({"ts": ts, "side": "sell", "spot": price, "usd": got, "why": "Took half at %.1fx" % p["TAKE_HALF_X"]})
-            acts.append({"type": "partial", "pos": pos, "spot": price, "usd": got})
+            pos.legs.append({"ts": ts, "side": "sell", "spot": price, "usd": got, "qty": q, "why": "Took half at %.1fx" % p["TAKE_HALF_X"]})
+            acts.append({"type": "partial", "pos": pos, "spot": price, "usd": got, "why": "Took half at %.1fx" % p["TAKE_HALF_X"]})
         if pos.took_half:
             if price <= pos.peak_after * (1 - p["TRAIL_PCT"] / 100):
-                acts += self._close(pos, cs, ts, price, liq, "Trailing stop")
+                acts += self._core_exit(pos, cs, ts, price, liq, "Trailing stop")
             elif price <= pos.spot_at_entry:
                 acts += self._close(pos, cs, ts, price, liq, "Back to entry after taking half")
         return acts
+
+    def _core_exit(self, pos, cs, ts, price, liq, reason):
+        """Sell the position, but keep a moonbag if that's on and the trade is already in profit."""
+        keep = pos.qty_total * self.p.get("MOONBAG_PCT", 0) / 100
+        if not keep or pos.moon or not pos.took_half or price <= pos.spot_at_entry or keep >= pos.qty_open:
+            return self._close(pos, cs, ts, price, liq, reason)
+        q = pos.qty_open - keep
+        got = self.broker.sell(price, liq, q)
+        pos.qty_open = keep
+        pos.proceeds += got
+        pos.moon = True
+        why = "%s · kept a %.0f%% moonbag" % (reason, self.p["MOONBAG_PCT"])
+        pos.legs.append({"ts": ts, "side": "sell", "spot": price, "usd": got, "qty": q, "why": why})
+        return [{"type": "partial", "pos": pos, "spot": price, "usd": got, "why": why}]
 
     def _close(self, pos, cs, ts, price, liq, reason, panic=False):
         got = self.broker.sell(price, liq, pos.qty_open, panic=panic) if pos.qty_open > 0 else 0.0

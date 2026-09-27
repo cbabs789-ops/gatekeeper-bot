@@ -106,8 +106,10 @@ class Runner:
             for leg in legs[1:]:
                 if leg["side"] == "sell":
                     pos.proceeds += leg["usd"]
-                    pos.qty_open = pos.qty_total / 2
+                    pos.qty_open = pos.qty_open - leg["qty"] if leg.get("qty") else pos.qty_total / 2
                     pos.took_half = True
+                    if "moonbag" in (leg.get("why") or ""):
+                        pos.moon = True
             cs = strat.coins.get(r["mint"])
             pos.peak_after = cs.peak_price if cs else pos.spot_at_entry
             strat.positions[r["mint"]] = pos
@@ -284,7 +286,7 @@ class Runner:
         elif a["type"] == "partial":
             self.con.execute("UPDATE trades SET legs=? WHERE id=?", (json.dumps(pos.legs), pos.trade_id))
             if alert:
-                await notify.send(self.session, tag + notify.fmt_partial(pos, a["spot"], a["usd"]))
+                await notify.send(self.session, tag + notify.fmt_partial(pos, a["spot"], a["usd"], a.get("why")))
         elif a["type"] == "close":
             self.con.execute("UPDATE trades SET closed_at=?, proceeds_usd=?, pnl_usd=?, pnl_pct=?, exit_reason=?, legs=? WHERE id=?",
                              (pos.closed_at, pos.proceeds, pos.pnl_usd, pos.pnl_pct, pos.exit_reason, json.dumps(pos.legs), pos.trade_id))
@@ -294,7 +296,7 @@ class Runner:
             web.HUB.publish({"type": a["type"], "strategy": name, "symbol": pos.symbol,
                              "usd": round(a.get("usd") or (pos.size_usd if a["type"] == "buy" else pos.proceeds), 2),
                              "pnl": round(pos.pnl_usd, 2) if a["type"] == "close" and pos.pnl_usd is not None else None,
-                             "reason": a.get("reason") or ""})
+                             "reason": a.get("reason") or a.get("why") or ""})
         except Exception:  # noqa: BLE001
             log.exception("dashboard push")
 

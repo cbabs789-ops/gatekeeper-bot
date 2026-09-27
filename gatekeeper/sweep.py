@@ -38,6 +38,9 @@ VARIANTS = [
     ("New coins + exit if pool drains 15%", {"LIQ_DRAIN_PCT": 15}, "wide"),
     ("New coins + all protections", PROTECT, "wide"),
     ("Current Main + all protections", PROTECT),
+    # --- moonbag: keep a slice after taking profit to catch the rare huge runner ---
+    ("New coins + 20% moonbag", {"MOONBAG_PCT": 20}, "wide"),
+    ("New coins + all protections + 20% moonbag", dict(PROTECT, MOONBAG_PCT=20), "wide"),
 ]
 
 

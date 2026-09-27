@@ -35,6 +35,8 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 
 21. **Live charts and Fomo links.** Each open trade on the dashboard shows its price chart since entry with the entry, stop, take-profit and profit-lock lines and every buy and sell marked. Tap a closed trade to see how it played out. Every coin name, on the dashboard and in Telegram alerts, opens the coin in the Fomo app.
 
+22. **Moonbag.** `MOONBAG_PCT` keeps a slice of a winning trade (after it has taken profit) with no 6-hour limit and a wide 50% trailing stop, to catch the rare coin that runs 10x to 100x. `/test` and `/testfollow` compare it. Recorded data only covers 12 hours per coin, so the test understates multi-day runs.
+
 ## Install (fresh Ubuntu server, as root)
 
 ```
