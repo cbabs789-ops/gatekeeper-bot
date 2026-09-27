@@ -51,7 +51,28 @@ def fmt_close(pos, spot, reason):
         money(pos.pnl_usd), pos.pnl_pct, money(pos.size_usd), dex_link(pos.mint))
 
 
+def _chunks(text, limit=3900):
+    """Telegram caps messages at 4096 characters; split on line breaks."""
+    out, cur = [], ""
+    for line in text.split("\n"):
+        if cur and len(cur) + len(line) + 1 > limit:
+            out.append(cur)
+            cur = ""
+        cur = (cur + "\n" + line) if cur else line[:limit]
+    return out + [cur] if cur else out
+
+
 async def send(session, text, chat_id=None, token=None):
+    parts = _chunks(text)
+    if len(parts) > 1:
+        ok = True
+        for part in parts:
+            ok = await _send_one(session, part, chat_id, token) and ok
+        return ok
+    return await _send_one(session, text, chat_id, token)
+
+
+async def _send_one(session, text, chat_id=None, token=None):
     token = token or config.TELEGRAM_BOT_TOKEN
     chat_id = chat_id or config.TELEGRAM_CHAT_ID
     if not token or not chat_id:

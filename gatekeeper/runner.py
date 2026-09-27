@@ -402,6 +402,7 @@ class Runner:
                 self.con.execute("DELETE FROM snapshots WHERE ts < ?", (now_ms() - keep * 86400000,))
                 fomo.ensure_schema(self.con)
                 self.con.execute("DELETE FROM fomo_events WHERE ts < ?", (now_ms() - 30 * 86400000,))
+                self.con.execute("DELETE FROM trader_calls WHERE ts < ?", (now_ms() - 30 * 86400000,))
                 db.kv_set(self.con, "pruned", key)
             await asyncio.sleep(60)
 
