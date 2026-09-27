@@ -11,7 +11,7 @@ import aiohttp
 import html
 import re
 
-from . import config, db, fomo, followtest, notify, report, sweep
+from . import config, db, fomo, followtest, notify, report, sweep, web
 from .sources import CHAINS, EVM_RE, SOL_RE, dexscreener_batch, pair_to_snapshot, pumpportal_stream, safety_check
 from .strategy import MIN, Position, Strategy
 
@@ -369,12 +369,15 @@ class Runner:
                         asyncio.create_task(self.run_scan())
                     elif cmd in ("/traders", "traders", "/scorecard"):
                         await notify.send(self.session, fomo.scorecard_text(self.con))
+                    elif cmd in ("/site", "site", "/dashboard", "/live"):
+                        url = await web.public_url(self.session, self.con)
+                        await notify.send(self.session, "📺 Live dashboard (keep this link private):\n%s\n\nIf it won't load, the server firewall may block port %d. Run in the console: ufw allow %d" % (html.escape(url), web.PORT, web.PORT))
                     elif cmd in ("/testfollow", "testfollow", "/followtest", "/test_follow", "/follow"):
                         asyncio.create_task(self.run_followtest())
                     elif cmd in ("/sweep", "sweep", "/test", "test"):
                         asyncio.create_task(self.run_sweep())
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through 17 rule variations (10 to 30 min)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through 17 rule variations (10 to 30 min)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard")
                     elif cmd.startswith("/"):
                         await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
             except Exception as e:  # noqa: BLE001
@@ -411,6 +414,10 @@ class Runner:
             self.session = session
             await notify.send(session, "🤖 Gatekeeper bot started. Strategies: %s. %d open paper trades. Send /help for commands."
                               % (", ".join(self.strats), sum(len(s.positions) for s in self.strats.values())))
+            try:
+                await web.serve(self)
+            except Exception:  # noqa: BLE001
+                log.exception("Dashboard failed to start")
             await asyncio.gather(
                 fomo.Feed(self.con, self.on_fomo_alert, self.track_coin).run(),
                 pumpportal_stream(self.on_event, config.PUMPPORTAL_API_KEY),
