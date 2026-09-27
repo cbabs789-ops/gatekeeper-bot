@@ -145,8 +145,12 @@ def make_app(runner):
             log.exception("dashboard state")
             return web.json_response({"error": str(e)[:200]}, status=500)
 
+    async def icon(req):
+        return web.Response(body=ICON, content_type="image/png", headers={"Cache-Control": "max-age=86400"})
+
     app = web.Application()
     app.router.add_get("/", page)
+    app.router.add_get("/icon.png", icon)
     app.router.add_get("/api/state", api)
     return app
 
@@ -158,14 +162,20 @@ async def serve(runner):
     log.info("Dashboard on port %d", PORT)
 
 
+import base64 as _b64
+ICON = _b64.b64decode("iVBORw0KGgoAAAANSUhEUgAAALQAAAC0CAIAAACyr5FlAAAEGUlEQVR42u3dPVbjMBQG0KBDS0HFGmgo6NgJNQujZid0FGnYzhTTzGFIILb+3tP92uEwwbr+JNlOcnVze3cQ+S7FIRA4BA6BQ+AQOAQOgUPgEDgEDhE4BA6BQ+AQOAQOiZHr4a/g8e3JMJzKx/P7wP/9ashjgkCEgNIbBxaBiHTCwUREJYWMoOlwVNs2BxahK6Qhjt/L+Hw5GuP/c//6MNZHKxw/ygCiLpQWPprgOC8Di0ZEqvuoj+OMDCxaE6nrozKOUzKw6Eakoo9CRtCcOqoVd4iFDD7a4iAjpY/S/3VLlONcAce3SMkY7mN/eRQy+BgwrUj0lD6EJeLiYxcON13nz54xKpPjlYHHvwwhKSHKo0zLVoaPgt2KwCHdcFhwrLDsqNYcFhz5lh2mFYFD4BA4pEeuHYKZ8+Up4s6rfs0RRsbhkvfAwbGWjP4+4Igko7MPOILJ6OkDDoEjUW3AIXDIrLUBR1QZfa6GwUEGHGTAQUbFuPEWI0MetNMcAWpj1COYcJABBxlwkAEHGXCsvXGFQyatDThMKHCQAQcZcJABBxlwkGErK8FqAw4TChxkwEEGHGTAQQYcAofaCFYbcJABBxlwkAEHGXBkkRE314lHa5LzNe5XBpTE53HTMzv3hJIKR+dP7VxBRhIcnT+1cxEZGXB0/tTOdWQstFu5f33YT2QpGeFxXDree4ik37imwrFnmNuNdKbvuiurydhGZLUJJTCOzgvMNWWExNFia3rmdy4r4xDr8nmHK55fxnhlGZGao89m4d8WWVxGmObY/Emu20gtuGuN2hx7PuP38+XY9MzO/SXtJbGM1kRyy5h6Wrm0238cqr8/UGvKSC9j3uaoLqPuoK4gY9LmaP1FAjsrZBEZMzZHt6+YaL1WhSOqDEQiTSvtFhkdJhrNkVbGRb92qZopsWSMvai12gRUYsno8JLOXEmz5phuEuk/Np8vxznfH5Ucx/wyVtYwclqJIkN6N8cGGVgs0RxkwGHKh4MMOMiAgwwZisNtCzi2jz0Zq08rblvAcZkPMqbNgBtvNGgOgUPgEDhE4BA4BA6BQ+CQbDi8l3Ce1BqLjTg+nt+NQaBsGy/TisAhY3FYdmRacOzCYdmRe8FRf1pRHmlqYy8O5ZG4NposSJVHjtqwW5GWOL5tLeUxSW3snPcrNAcfKWW0nVb4CLrUqIzjFFI+RsmospGs1hx8JJNReVrhI5OMw+FwdXN7V/dFP749nfon73Vrvcioe1myPo7zPhBpt/asfsG6CY4ffSBSfUvS4lZGKxy/8QFKrT1qo5tcDXFc5EOq7wNmx4FIUBb1t7Kj/gYyAjeHFgl6pvXGgUigAh6DA5QQM/J4HDJtPAkmcAgcAofAIXAIHAKHwCFwCBwicAgcAofAIXDIXPkDjCr3gU2MNCUAAAAASUVORK5CYII=")
+
 PAGE = r"""<!doctype html>
 <html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Gatekeeper Live</title>
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Gatekeeper"><meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0d1117"><link rel="apple-touch-icon" href="icon.png"><link rel="icon" href="icon.png">
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--text:#e6edf3;--dim:#8b949e;--up:#3fb950;--down:#f85149;--warn:#d29922;--acc:#58a6ff}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-.wrap{max-width:1100px;margin:0 auto;padding:16px}
+.wrap{max-width:1100px;margin:0 auto;padding:16px;padding-top:max(16px,env(safe-area-inset-top))}
 header{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
 h1{font-size:20px;margin:0}h2{font-size:14px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin:26px 0 10px}
 .pill{font-size:12px;color:var(--dim)}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--up)}
