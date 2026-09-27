@@ -154,6 +154,18 @@ def parse_rugcheck(rep):
         except (TypeError, ValueError):
             pass
     top10 = round(sum(sorted(top, reverse=True)[:10]), 2) if top else None
+    prev = rep.get("creatorTokens") or []
+    if not isinstance(prev, list):
+        prev = []
+    prev = [t for t in prev if isinstance(t, dict) and t.get("mint") != rep.get("mint")]
+    def _mc(t):
+        for k in ("marketCap", "market_cap", "mcap", "usdMarketCap"):
+            try:
+                return float(t.get(k))
+            except (TypeError, ValueError):
+                continue
+        return None
+    dead = sum(1 for t in prev if (_mc(t) is not None and _mc(t) < 10000))
     danger = [r.get("name") for r in (rep.get("risks") or [])
               if str(r.get("level")).lower() == "danger" and r.get("name") != "Low Liquidity"]
     return {
@@ -164,6 +176,9 @@ def parse_rugcheck(rep):
         "insiders": rep.get("graphInsidersDetected"),
         "danger": ", ".join(d for d in danger if d) or None,
         "rc_score": rep.get("score_normalised"),
+        "creator": rep.get("creator"),
+        "creator_prev": len(prev),
+        "creator_dead": dead,
     }
 
 

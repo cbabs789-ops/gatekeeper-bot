@@ -40,6 +40,8 @@ STRATEGY_DEFAULTS = {
     "MIN_LP_LOCKED_PCT": 90,
     "MAX_TOP10_PCT": 30,
     "MAX_INSIDERS": 10,
+    "MAX_DEV_PREV_COINS": 999,      # skip devs who launched more than this many earlier coins (999 = off until tested)
+    "MAX_DEV_DEAD_COINS": 999,      # skip devs with more than this many dead earlier coins
     # --- timing ---
     "MIN_AGE_MIN": 20,              # minutes since graduation before any entry
     "MAX_AGE_MIN": 360,

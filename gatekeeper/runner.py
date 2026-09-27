@@ -276,7 +276,7 @@ class Runner:
             await notify.send(self.session, "A rule test is already running. Results will show up here when it's done.")
             return
         self.sweeping = True
-        await notify.send(self.session, "🧪 Testing 15 rule variations on the last 7 days of recorded coins. This takes 10 to 30 minutes on the small server; alerts keep working meanwhile.")
+        await notify.send(self.session, "🧪 Testing 17 rule variations on the last 7 days of recorded coins. This takes 10 to 30 minutes on the small server; alerts keep working meanwhile.")
         try:
             res = await asyncio.to_thread(sweep.run, 7)
             await notify.send(self.session, sweep.text(res))
@@ -322,7 +322,7 @@ class Runner:
                     elif cmd in ("/sweep", "sweep", "/test", "test"):
                         asyncio.create_task(self.run_sweep())
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/test: replay recorded coins through 15 rule variations (10 to 30 min)")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/test: replay recorded coins through 17 rule variations (10 to 30 min)")
             except Exception as e:  # noqa: BLE001
                 log.warning("Telegram poll error: %s", e)
                 await asyncio.sleep(10)

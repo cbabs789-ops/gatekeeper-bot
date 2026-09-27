@@ -49,7 +49,10 @@ def connect(path=None):
     for sql in ("ALTER TABLE coins ADD COLUMN chain TEXT DEFAULT 'solana'",
                 "ALTER TABLE coins ADD COLUMN added_at INTEGER",
                 "ALTER TABLE coins ADD COLUMN source TEXT",
-                "ALTER TABLE safety ADD COLUMN lp_na INTEGER DEFAULT 0"):
+                "ALTER TABLE safety ADD COLUMN lp_na INTEGER DEFAULT 0",
+                "ALTER TABLE safety ADD COLUMN creator TEXT",
+                "ALTER TABLE safety ADD COLUMN creator_prev INTEGER",
+                "ALTER TABLE safety ADD COLUMN creator_dead INTEGER"):
         try:
             con.execute(sql)
         except sqlite3.OperationalError:
@@ -58,9 +61,11 @@ def connect(path=None):
 
 
 def save_safety(con, res):
-    con.execute("INSERT OR REPLACE INTO safety(mint, checked_at, mint_revoked, freeze_revoked, lp_locked, top10, insiders, danger, rc_score, lp_na) "
-                "VALUES(:mint,:checked_at,:mint_revoked,:freeze_revoked,:lp_locked,:top10,:insiders,:danger,:rc_score,:lp_na)",
-                dict({"lp_na": 0, "rc_score": None, "insiders": None, "top10": None, "danger": None}, **res))
+    con.execute("INSERT OR REPLACE INTO safety(mint, checked_at, mint_revoked, freeze_revoked, lp_locked, top10, insiders, danger, rc_score, lp_na, "
+                "creator, creator_prev, creator_dead) VALUES(:mint,:checked_at,:mint_revoked,:freeze_revoked,:lp_locked,:top10,:insiders,:danger,"
+                ":rc_score,:lp_na,:creator,:creator_prev,:creator_dead)",
+                dict({"lp_na": 0, "rc_score": None, "insiders": None, "top10": None, "danger": None,
+                      "creator": None, "creator_prev": None, "creator_dead": None}, **res))
 
 
 def kv_get(con, k, default=None):

@@ -24,6 +24,8 @@ VARIANTS = [
     ("Combo: 60+ min, $30K+ pool, 35% liq exit", {"MIN_AGE_MIN": 60, "MIN_LIQ_USD": 30000, "LIQ_PULL_PCT": 35}),
     ("Combo + shallow dips", {"MIN_AGE_MIN": 60, "MIN_LIQ_USD": 30000, "LIQ_PULL_PCT": 35, "PULLBACK_MIN_PCT": 10, "PULLBACK_MAX_PCT": 25}),
     ("Combo + 2h old + top 10 at 20%", {"MIN_AGE_MIN": 120, "MAX_AGE_MIN": 720, "MIN_LIQ_USD": 30000, "LIQ_PULL_PCT": 35, "MAX_TOP10_PCT": 20}),
+    ("Skip devs with 3+ earlier coins", {"MAX_DEV_PREV_COINS": 2}),
+    ("Skip devs with any dead earlier coin", {"MAX_DEV_DEAD_COINS": 0}),
     ("Current rules with zero trading costs (reference only)", {"FEE_PCT": 0, "PENALTY_PCT": 0, "PANIC_PENALTY_PCT": 0}),
 ]
 

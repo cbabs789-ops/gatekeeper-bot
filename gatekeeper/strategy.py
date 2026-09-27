@@ -146,6 +146,10 @@ class Strategy:
             if saf.get("top10") is not None and saf["top10"] > p["MAX_TOP10_PCT"]: fails.append("top 10 hold %.0f%%" % saf["top10"])
             if saf.get("insiders") is not None and saf["insiders"] > p["MAX_INSIDERS"]: fails.append("%d insiders" % saf["insiders"])
             if saf.get("danger"): fails.append("RugCheck: " + saf["danger"])
+            if saf.get("creator_prev") is not None and saf["creator_prev"] > p["MAX_DEV_PREV_COINS"]:
+                fails.append("dev launched %d coins before" % saf["creator_prev"])
+            if saf.get("creator_dead") is not None and saf["creator_dead"] > p["MAX_DEV_DEAD_COINS"]:
+                fails.append("dev has %d dead coins" % saf["creator_dead"])
         runup = cs.peak_price / cs.grad_price if cs.grad_price else 0
         if runup < p["MIN_RUNUP_X"]:
             fails.append("hasn't run (%.1fx)" % runup)
@@ -184,6 +188,10 @@ class Strategy:
         if saf.get("top10") is not None and saf["top10"] > p["MAX_TOP10_PCT"]: fails.append("top 10 hold %.0f%%" % saf["top10"])
         if saf.get("insiders") is not None and saf["insiders"] > p["MAX_INSIDERS"]: fails.append("%d insiders" % saf["insiders"])
         if saf.get("danger"): fails.append(saf["danger"])
+        if saf.get("creator_prev") is not None and saf["creator_prev"] > p["MAX_DEV_PREV_COINS"]:
+            fails.append("dev launched %d coins before" % saf["creator_prev"])
+        if saf.get("creator_dead") is not None and saf["creator_dead"] > p["MAX_DEV_DEAD_COINS"]:
+            fails.append("dev has %d dead coins" % saf["creator_dead"])
         if liq < p["MIN_LIQ_USD"]: fails.append("pool $%.0f" % liq)
         return fails
 
