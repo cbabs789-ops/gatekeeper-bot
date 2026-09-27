@@ -309,9 +309,10 @@ class Feed:
     CLUSTER_WINDOW = 30 * MIN
     CROWD_WINDOW = 15 * MIN
 
-    def __init__(self, con, on_alert):
+    def __init__(self, con, on_alert, on_track=None):
         self.con = con
         self.on_alert = on_alert          # async fn(kind, info)
+        self.on_track = on_track          # fn(address, chain): start recording prices for a coin
         ensure_schema(con)
         self.watch = {h.lower() for h in watchlist()}
         self.min_usd = float(config.os.environ.get("GK_FOMO_MIN_USD", "200"))
@@ -356,6 +357,8 @@ class Feed:
         if m["alertType"] != "buy" or (_num(m.get("usdValue")) or 0) < self.min_usd:
             return
         self._record_call(m, addr, now)
+        if self.on_track and (m.get("trader") or "").lower() in self.watch:
+            self.on_track(addr, (m.get("chain") or "").lower())
         info = {"token": m.get("token"), "address": addr, "chain": m.get("chain") or ""}
         cl = self._recent(addr, now - self.CLUSTER_WINDOW, True)
         if len(cl) >= self.cluster_n and not self._alerted(addr, "cluster", now):

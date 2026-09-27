@@ -11,7 +11,7 @@ import aiohttp
 import html
 import re
 
-from . import config, db, fomo, notify, report, sweep
+from . import config, db, fomo, followtest, notify, report, sweep
 from .sources import CHAINS, EVM_RE, SOL_RE, dexscreener_batch, pair_to_snapshot, pumpportal_stream, safety_check
 from .strategy import MIN, Position, Strategy
 
@@ -44,6 +44,7 @@ class Runner:
         self.tick = 0
         self.last_liq = {}
         self.sweeping = False
+        self.tracking = set()
         for name, st in self.strats.items():
             self._restore(name, st)
 
@@ -271,6 +272,44 @@ class Runner:
         lines.append("Following a crowd means you're buying after them. Check the chart before acting.")
         await notify.send(self.session, "\n".join(lines))
 
+    def track_coin(self, addr, chain):
+        """Start recording prices for a coin one of your list traders bought (feeds the Follow test)."""
+        m = followtest.norm(addr, chain)
+        if not m or m in self.tracking:
+            return
+        self.tracking.add(m)
+        if self.con.execute("SELECT 1 FROM coins WHERE mint=?", (m,)).fetchone():
+            return
+        asyncio.create_task(self._track(m, "robinhood" if m.startswith("0x") else "solana"))
+
+    async def _track(self, m, chain):
+        try:
+            pair = (await dexscreener_batch(self.session, [m], chain)).get(m)
+            if not pair or self.con.execute("SELECT 1 FROM coins WHERE mint=?", (m,)).fetchone():
+                return
+            snap = pair_to_snapshot(m, pair, now_ms())
+            self.con.execute("INSERT INTO coins(mint, symbol, name, graduated_at, grad_price, last_seen, status, chain, added_at, source) "
+                             "VALUES(?,?,?,?,?,?,'watching',?,?,'fomo')",
+                             (m, snap["_symbol"], snap["_name"], int(pair.get("pairCreatedAt") or now_ms()), snap["price"],
+                              now_ms(), chain, now_ms()))
+        except Exception:  # noqa: BLE001
+            log.exception("Tracking %s failed", m)
+
+    async def run_followtest(self):
+        if self.sweeping:
+            await notify.send(self.session, "A test is already running. Results will show up here when it's done.")
+            return
+        self.sweeping = True
+        await notify.send(self.session, "🧪 Testing %d Follow rules on the last 7 days of Fomo trades. Takes a minute or two." % len(followtest.VARIANTS))
+        try:
+            res = await asyncio.to_thread(followtest.run, 7)
+            await notify.send(self.session, followtest.text(res))
+        except Exception as e:  # noqa: BLE001
+            log.exception("Follow test failed")
+            await notify.send(self.session, "Follow test failed: %s" % html.escape(str(e)[:300]))
+        finally:
+            self.sweeping = False
+
     async def scorecard_loop(self):
         while True:
             try:
@@ -330,10 +369,14 @@ class Runner:
                         asyncio.create_task(self.run_scan())
                     elif cmd in ("/traders", "traders", "/scorecard"):
                         await notify.send(self.session, fomo.scorecard_text(self.con))
+                    elif cmd in ("/testfollow", "testfollow", "/followtest", "/test_follow", "/follow"):
+                        asyncio.create_task(self.run_followtest())
                     elif cmd in ("/sweep", "sweep", "/test", "test"):
                         asyncio.create_task(self.run_sweep())
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through 17 rule variations (10 to 30 min)")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through 17 rule variations (10 to 30 min)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)")
+                    elif cmd.startswith("/"):
+                        await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
             except Exception as e:  # noqa: BLE001
                 log.warning("Telegram poll error: %s", e)
                 await asyncio.sleep(10)
@@ -352,6 +395,7 @@ class Runner:
                     if fomo.key():
                         await notify.send(self.session, fomo.scorecard_text(self.con))
                     if fomo.key():
+                        await self.run_followtest()
                         await self.run_scan()
             if now.hour == 4 and db.kv_get(self.con, "pruned") != key:
                 keep = int(float(__import__("os").environ.get("GK_KEEP_DAYS", "14")))
@@ -367,7 +411,7 @@ class Runner:
             await notify.send(session, "🤖 Gatekeeper bot started. Strategies: %s. %d open paper trades. Send /help for commands."
                               % (", ".join(self.strats), sum(len(s.positions) for s in self.strats.values())))
             await asyncio.gather(
-                fomo.Feed(self.con, self.on_fomo_alert).run(),
+                fomo.Feed(self.con, self.on_fomo_alert, self.track_coin).run(),
                 pumpportal_stream(self.on_event, config.PUMPPORTAL_API_KEY),
                 self.poll_loop(), self.safety_loop(), self.telegram_loop(), self.daily_loop(), self.scorecard_loop())
 

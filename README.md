@@ -21,6 +21,8 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 12. **Trader scorecard.** Every buy by a trader on your Fomo list (Solana and Robinhood Chain) is priced when it happens and again 1, 6 and 24 hours later. `/traders` ranks them by what their coins did after they bought: median change, share of buys up 10%+ at 6 hours, and how many drained. Sent with the Sunday recap too. Free: uses the live feed and DexScreener.
 13. **Dev history.** RugCheck's list of the creator's earlier coins is stored with each safety check, with optional gates (`MAX_DEV_PREV_COINS`, `MAX_DEV_DEAD_COINS`) that `/test` evaluates.
 
+14. **Follow test.** `/testfollow` in Telegram (or `gatekeeper followtest`) replays the stored Fomo feed: when would each Follow rule have bought (2+ or 3+ of your traders, any 1 trader, $1K+ buys, waiting 10 or 30 minutes, trending crowds) and how would the same exits have done, split into first and second half. Every coin a trader on your list buys is now price-tracked for 12 hours so this test has data. Runs with the Sunday recap too.
+
 ## Install (fresh Ubuntu server, as root)
 
 ```

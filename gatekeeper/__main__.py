@@ -123,6 +123,8 @@ def main():
     sub.add_parser("settings")
     sw = sub.add_parser("sweep")
     sw.add_argument("--days", type=float, default=7)
+    ft = sub.add_parser("followtest")
+    ft.add_argument("--days", type=float, default=7)
     fm = sub.add_parser("fomo")
     fm.add_argument("what", choices=["scan", "feed", "raw", "credits", "traders"])
     fm.add_argument("handle", nargs="?")
@@ -143,6 +145,9 @@ def main():
     elif a.cmd == "sweep":
         from . import sweep
         print(plain(sweep.text(sweep.run(a.days, progress=lambda n: print("  ...%s snapshots" % format(n, ","), flush=True)))))
+    elif a.cmd == "followtest":
+        from . import followtest
+        print(plain(followtest.text(followtest.run(a.days))))
     elif a.cmd == "fomo":
         sys.exit(asyncio.run(_fomo(a)))
     elif a.cmd == "settings":
