@@ -64,8 +64,13 @@ def run(days=7, progress=None):
     q = ("SELECT * FROM snapshots WHERE ts>=? AND mint IN (SELECT mint FROM safety WHERE mint_revoked=1 "
          "AND freeze_revoked=1 AND danger IS NULL) ORDER BY ts")
     last, n, ticks = None, 0, 0
+    span = max(1, lo_hi["b"] - lo_hi["a"])
+    next_mark = 25
     for r in con.execute(q, (since,)):
         s = dict(r)
+        if progress and (s["ts"] - lo_hi["a"]) * 100 / span >= next_mark:
+            progress(next_mark)
+            next_mark += 25
         if last is not None and s["ts"] != last:
             ticks += 1
             for _, st in strats:
@@ -79,8 +84,6 @@ def run(days=7, progress=None):
         for _, st in strats:
             st.on_snapshot(s, c)
         n += 1
-        if progress and n % 500000 == 0:
-            progress(n)
     out = []
     for label, st in strats:
         for mint, pos in list(st.positions.items()):

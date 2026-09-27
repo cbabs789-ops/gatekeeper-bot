@@ -499,14 +499,20 @@ class Runner:
                 log.exception("Scorecard pricing failed")
             await asyncio.sleep(60)
 
-    async def run_sweep(self):
+    async def run_sweep(self, days=7):
         if self.sweeping:
             await notify.send(self.session, "A rule test is already running. Results will show up here when it's done.")
             return
         self.sweeping = True
-        await notify.send(self.session, "🧪 Testing %d rule variations on the last 7 days of recorded coins. This takes 10 to 30 minutes; alerts keep working meanwhile." % len(sweep.VARIANTS))
+        await notify.send(self.session, "🧪 Testing %d rule variations on the last %s of recorded coins. Big tests take 30 to 60 minutes; I'll post progress. "
+                          "Alerts keep working, but updating or restarting the bot cancels the test." % (
+                              len(sweep.VARIANTS), "day" if days == 1 else "%g days" % days))
+        loop = asyncio.get_running_loop()
+        def progress(pc):
+            if pc < 100:
+                asyncio.run_coroutine_threadsafe(notify.send(self.session, "🧪 Rule test %d%% done..." % pc), loop)
         try:
-            res = await asyncio.to_thread(sweep.run, 7)
+            res = await asyncio.to_thread(sweep.run, days, progress)
             await notify.send(self.session, sweep.text(res))
         except Exception as e:  # noqa: BLE001
             log.exception("Sweep failed")
@@ -568,9 +574,14 @@ class Runner:
                     elif cmd in ("/testfollow", "testfollow", "/followtest", "/test_follow", "/follow"):
                         asyncio.create_task(self.run_followtest())
                     elif cmd in ("/sweep", "sweep", "/test", "test"):
-                        asyncio.create_task(self.run_sweep())
+                        parts = (msg.get("text") or "").split()
+                        try:
+                            days = min(14.0, max(0.5, float(parts[1]))) if len(parts) > 1 else 7
+                        except ValueError:
+                            days = 7
+                        asyncio.create_task(self.run_sweep(days))
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation, including in-trade protection (10 to 30 min)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)")
                     elif cmd.startswith("/"):
                         await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
             except Exception as e:  # noqa: BLE001

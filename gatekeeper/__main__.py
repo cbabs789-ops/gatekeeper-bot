@@ -144,7 +144,7 @@ def main():
         sys.exit(asyncio.run(_setup_telegram()))
     elif a.cmd == "sweep":
         from . import sweep
-        print(plain(sweep.text(sweep.run(a.days, progress=lambda n: print("  ...%s snapshots" % format(n, ","), flush=True)))))
+        print(plain(sweep.text(sweep.run(a.days, progress=lambda pc: print("  ...%d%% done" % pc, flush=True)))))
     elif a.cmd == "followtest":
         from . import followtest
         print(plain(followtest.text(followtest.run(a.days))))
