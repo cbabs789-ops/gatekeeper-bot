@@ -23,7 +23,13 @@ def price(x):
 
 def dex_link(mint, chain=None):
     chain = chain or ("robinhood" if str(mint).startswith("0x") else "solana")
-    return '<a href="https://dexscreener.com/%s/%s">DexScreener</a>' % (chain, mint)
+    return '<a href="%s">👉 Open in Fomo</a> · <a href="https://dexscreener.com/%s/%s">Chart</a>' % (fomo_url(mint, chain), chain, mint)
+
+
+def fomo_url(mint, chain=None):
+    """The coin's page in the Fomo app (opens the app on a phone that has it)."""
+    chain = chain or ("robinhood" if str(mint).startswith("0x") else "solana")
+    return "https://fomo.family/tokens/%s/%s" % (chain, mint)
 
 
 def fmt_buy(pos, spot, liq, p=None):

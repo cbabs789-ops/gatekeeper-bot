@@ -15,7 +15,7 @@ from datetime import datetime
 import aiohttp
 from aiohttp import web
 
-from . import config, db, fomo, report
+from . import config, db, fomo, notify, report
 from .strategy import summarize
 
 log = logging.getLogger("gatekeeper.web")
@@ -44,13 +44,39 @@ async def public_url(session, con):
 
 
 def _link(mint):
-    return "https://dexscreener.com/%s/%s" % ("robinhood" if mint.startswith("0x") else "solana", mint)
+    return notify.fomo_url(mint)
 
 
 def _stats(rows):
     s = summarize(rows)
     return {"trades": s.get("trades", 0), "win_rate": round(s.get("win_rate", 0), 1), "pnl": round(s.get("total_pnl", 0), 2),
             "best": round(s.get("best", 0), 2), "worst": round(s.get("worst", 0), 2)}
+
+
+def chart_data(con, mint, t0, t1, entry, legs):
+    """Price path around a trade as % change from our entry, plus our buy and sell points."""
+    rows = con.execute("SELECT ts, price FROM snapshots WHERE mint=? AND ts>=? AND ts<=? ORDER BY ts",
+                       (mint, t0 - 10 * 60000, t1)).fetchall()
+    step = max(1, len(rows) // 240)
+    pts = [[r["ts"], round((r["price"] / entry - 1) * 100, 2)] for r in rows[::step] if r["price"]]
+    if rows and rows[-1]["price"] and (not pts or pts[-1][0] != rows[-1]["ts"]):
+        pts.append([rows[-1]["ts"], round((rows[-1]["price"] / entry - 1) * 100, 2)])
+    mk = [[g.get("ts"), g.get("side"), round((g["spot"] / entry - 1) * 100, 2)] for g in legs if g.get("spot") and g.get("ts")]
+    return {"points": pts, "legs": mk}
+
+
+def _levels(p, pos, entry):
+    best = (pos.peak_after / entry - 1) * 100 if entry else 0
+    lv = {"stop": -p["STOP_LOSS_PCT"]}
+    if not pos.took_half:
+        lv["target"] = round((p["TAKE_HALF_X"] - 1) * 100, 1)
+    else:
+        lv["trail"] = round((pos.peak_after * (1 - p["TRAIL_PCT"] / 100) / entry - 1) * 100, 1)
+    if p.get("LOCK_START_PCT") and best >= p["LOCK_START_PCT"]:
+        lv["lock"] = round((pos.peak_after * (1 - p["LOCK_TRAIL_PCT"] / 100) / entry - 1) * 100, 1)
+    if p.get("BREAKEVEN_AT_PCT") and best >= p["BREAKEVEN_AT_PCT"]:
+        lv["floor"] = round(2 * (p["FEE_PCT"] + p["PENALTY_PCT"]), 1)
+    return lv
 
 
 def state(runner):
@@ -86,7 +112,9 @@ def state(runner):
                 "size": pos.size_usd, "value_if_sold": round(pos.proceeds + value, 2), "pnl": round(pnl, 2),
                 "pnl_pct": round(pnl / pos.size_usd * 100, 1), "move_pct": round((price / pos.spot_at_entry - 1) * 100, 1) if pos.spot_at_entry else None,
                 "took_half": pos.took_half, "liq": round(liq), "why": pos.why,
-                "stop_at": round(pos.spot_at_entry * (1 - st.p["STOP_LOSS_PCT"] / 100), 12)})
+                "stop_at": round(pos.spot_at_entry * (1 - st.p["STOP_LOSS_PCT"] / 100), 12),
+                "chart": dict(chart_data(con, mint, pos.opened_at, now, pos.spot_at_entry, pos.legs),
+                              levels=_levels(st.p, pos, pos.spot_at_entry)) if pos.spot_at_entry else None})
         out["strategies"].append({
             "name": name, "label": report.LABEL.get(name, name), "alerts": name in config.ALERT_PRESETS,
             "all": _stats(closed), "current": _stats(current), "since": since, "today": _stats(today),
@@ -100,7 +128,7 @@ def state(runner):
         out["equity"][name] = pts[::step] + (pts[-1:] if pts and (len(pts) - 1) % step else [])
 
     for r in con.execute("SELECT * FROM trades WHERE mode='live' AND closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 50"):
-        out["closed"].append({"strategy": r["run_id"] or "main", "symbol": r["symbol"], "link": _link(r["mint"]),
+        out["closed"].append({"id": r["id"], "strategy": r["run_id"] or "main", "symbol": r["symbol"], "link": _link(r["mint"]),
                               "opened_at": r["opened_at"], "closed_at": r["closed_at"], "pnl": round(r["pnl_usd"] or 0, 2),
                               "pnl_pct": round(r["pnl_pct"] or 0, 1), "exit": r["exit_reason"], "why": r["why_entered"]})
 
@@ -185,7 +213,24 @@ def make_app(runner):
             HUB.subs.discard(q)
         return resp
 
+    async def chart(req):
+        if not authed(req):
+            return web.json_response({"error": "forbidden"}, status=403)
+        try:
+            r = runner.con.execute("SELECT * FROM trades WHERE id=?", (int(req.query.get("id", "0")),)).fetchone()
+        except ValueError:
+            r = None
+        if not r:
+            return web.json_response({"error": "not found"}, status=404)
+        legs = json.loads(r["legs"] or "[]")
+        entry = legs[0]["spot"] if legs and legs[0].get("spot") else r["entry_price"]
+        st = runner.strats.get(r["run_id"] or "main")
+        stop = -(st.p["STOP_LOSS_PCT"] if st else 30)
+        d = chart_data(runner.con, r["mint"], r["opened_at"], (r["closed_at"] or r["opened_at"]) + 20 * 60000, entry, legs)
+        return web.json_response(dict(d, levels={"stop": stop}), headers={"Cache-Control": "no-store"})
+
     app = web.Application()
+    app.router.add_get("/api/chart", chart)
     app.router.add_get("/", page)
     app.router.add_get("/api/stream", stream)
     app.router.add_get("/icon.png", icon)
@@ -232,6 +277,10 @@ svg{width:100%;height:70px;display:block;margin-top:8px}
 .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:760px){.cols{grid-template-columns:1fr}}
 .empty{color:var(--dim);font-size:13px;padding:8px 2px}
 footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
+.chart{grid-column:1/-1;margin-top:6px}.chart svg{height:150px;margin:0}
+.item.tap{cursor:pointer}.hint{font-size:11px;color:var(--dim)}
+.legend{grid-column:1/-1;font-size:11px;color:var(--dim);display:flex;gap:10px;flex-wrap:wrap}
+.legend i{display:inline-block;width:12px;height:0;border-top:2px dashed;vertical-align:middle;margin-right:4px}
 #toasts{position:fixed;left:50%;transform:translateX(-50%);bottom:max(16px,env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:8px;z-index:9;width:min(92vw,440px)}
 .toast{background:#1f2630;border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:10px;padding:10px 14px;font-weight:600;box-shadow:0 6px 24px rgba(0,0,0,.5);animation:pop .25s ease-out}
 .toast.buy{border-left-color:var(--up)}.toast.close{border-left-color:var(--warn)}
@@ -247,7 +296,7 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 <div><h2>Fomo alerts</h2><div class="list" id="alerts"></div></div>
 </div>
 <h2>Closed trades</h2><div class="list" id="closed"></div>
-<footer>Paper trading with fake money. Buys and sells appear the instant they happen; prices refresh every 5 seconds. Not financial advice.</footer>
+<footer>Tap any coin name to open it in Fomo. Paper trading with fake money. Buys and sells appear the instant they happen; prices refresh every 5 seconds. Not financial advice.</footer>
 <div id="toasts"></div>
 </div>
 <script>
@@ -269,6 +318,27 @@ function spark(pts){const ns="http://www.w3.org/2000/svg",s=document.createEleme
  const p=document.createElementNS(ns,"polyline");p.setAttribute("points",pts.map((q,i)=>x(i)+","+y(q[1])).join(" "));p.setAttribute("fill","none");
  p.setAttribute("stroke",pts[pts.length-1][1]>=0?"#3fb950":"#f85149");p.setAttribute("stroke-width","2");p.setAttribute("vector-effect","non-scaling-stroke");s.appendChild(p);return s}
 function stat(k,v,c){const d=el("div","card");d.append(el("div","k",k),el("div","v "+(c||""),v));return d}
+const LV={stop:["#f85149","stop"],target:["#3fb950","sell half"],trail:["#d29922","trailing stop"],lock:["#d29922","profit lock"],floor:["#58a6ff","breakeven floor"]};
+function priceChart(d){const box=el("div","chart");const ns="http://www.w3.org/2000/svg";const s=document.createElementNS(ns,"svg");
+ const W=340,H=150,L=38,R=6,T=8,B=18;s.setAttribute("viewBox","0 0 "+W+" "+H);box.append(s);
+ const pts=(d&&d.points)||[];if(pts.length<2){box.append(el("div","hint","Chart fills in as prices come in."));return box}
+ const lv=d.levels||{};const ys=pts.map(p=>p[1]).concat([0],Object.values(lv).filter(v=>v!=null),(d.legs||[]).map(l=>l[2]));
+ let lo=Math.min(...ys),hi=Math.max(...ys);const padY=(hi-lo)*0.08||5;lo-=padY;hi+=padY;
+ const t0=pts[0][0],t1=pts[pts.length-1][0];const X=t=>L+(t-t0)/((t1-t0)||1)*(W-L-R),Y=v=>T+(hi-v)/(hi-lo)*(H-T-B);
+ const add=(tag,a)=>{const e=document.createElementNS(ns,tag);for(const k in a)e.setAttribute(k,a[k]);s.appendChild(e);return e};
+ const txt=(x,y,str,anchor)=>{const e=add("text",{x,y,fill:"#8b949e","font-size":"9","text-anchor":anchor||"start"});e.textContent=str};
+ const hl=(v,c)=>add("line",{x1:L,x2:W-R,y1:Y(v),y2:Y(v),stroke:c,"stroke-dasharray":"4 3","stroke-width":"1","vector-effect":"non-scaling-stroke"});
+ hl(0,"#8b949e");for(const k in lv)if(lv[k]!=null&&LV[k])hl(lv[k],LV[k][0]);
+ [hi-padY,0,lo+padY].forEach(v=>txt(L-4,Y(v)+3,(v>0?"+":"")+v.toFixed(0)+"%","end"));
+ const last=pts[pts.length-1][1];add("polyline",{points:pts.map(p=>X(p[0])+","+Y(p[1])).join(" "),fill:"none",stroke:"#e6edf3","stroke-width":"2","vector-effect":"non-scaling-stroke"});
+ (d.legs||[]).forEach(l=>{if(l[0]<t0||l[0]>t1)return;add("circle",{cx:X(l[0]),cy:Y(l[2]),r:4.5,fill:l[1]==="buy"?"#3fb950":"#f0883e",stroke:"#0d1117","stroke-width":"1.5"})});
+ const tm=ms=>new Date(ms).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"});txt(L,H-4,tm(t0));txt(W-R,H-4,tm(t1),"end");
+ const lg=el("div","legend");const it=(c,n)=>{const sp=el("span");const i=el("i");i.style.borderColor=c;sp.append(i,document.createTextNode(n));lg.append(sp)};
+ const pl=el("span","","━ price");pl.style.color="#e6edf3";lg.append(pl);it("#8b949e","entry");for(const k in lv)if(lv[k]!=null&&LV[k])it(LV[k][0],LV[k][1]+" "+(lv[k]>0?"+":"")+lv[k]+"%");
+ const dot=(c,n)=>{const sp=el("span",null,"● "+n);sp.style.color=c;lg.append(sp)};dot("#3fb950","buy");dot("#f0883e","sell");box.append(lg);return box}
+const OPEN_CHARTS={};
+async function toggleChart(item,id){if(OPEN_CHARTS[id]){delete OPEN_CHARTS[id];const c=item.querySelector(".chart");if(c)c.remove();const g=item.querySelector(".legend");if(g)g.remove();return}
+ OPEN_CHARTS[id]="loading";try{const r=await fetch("api/chart?id="+id+"&k="+encodeURIComponent(K));OPEN_CHARTS[id]=await r.json();item.append(priceChart(OPEN_CHARTS[id]))}catch(_){delete OPEN_CHARTS[id]}}
 function render(s){
  const h=s.health,ok=h.last_poll_s!=null&&h.last_poll_s<120;
  $("health").replaceChildren(el("span","dot"+(ok?"":" bad")),document.createTextNode((ok?"Live":"Price feed stalled")+" · last price check "+(h.last_poll_s??"?")+"s ago · "+(h.watching??"?")+" coins watched · open trades priced "+(h.fast_s!=null?h.fast_s+"s ago":"every 30s")+" · Fomo "+(h.fomo_last_s!=null?h.fomo_last_s+"s ago":"off")));
@@ -284,13 +354,15 @@ function render(s){
  $("open").replaceChildren(...(o.length?o.map(p=>{const d=el("div","item");const n=link("$"+p.symbol,p.link);const w=el("div");w.append(n,el("span","tag",NAMES[p.strategy]||p.strategy));if(p.took_half)w.append(el("span","tag","sold half"));
   d.append(w,el("b",cls(p.pnl),sgn(p.pnl)+" ("+pct(p.pnl_pct)+")"));
   d.append(el("div","sub","Price "+pct(p.move_pct)+" since entry · held "+dur(s.now-p.opened_at)+" · pool "+money(p.liq).replace(".00","")+" · $"+p.size+" in, worth "+money(p.value_if_sold)+" if sold"));
-  if(p.why)d.append(el("div","sub","Why: "+p.why));return d}):[el("div","empty","No open trades. He's waiting for a setup.")]));
+  if(p.why)d.append(el("div","sub","Why: "+p.why));if(p.chart)d.append(priceChart(p.chart));return d}):[el("div","empty","No open trades. He's waiting for a setup.")]));
  $("activity").replaceChildren(...(s.activity.length?s.activity.map(a=>{const d=el("div","item");const w=el("div");const icon=a.side==="buy"?"🟢 Bought ":"🔴 Sold ";w.append(document.createTextNode(icon),link("$"+a.symbol,a.link),el("span","tag",NAMES[a.strategy]||a.strategy));
   d.append(w,el("span","dim",money(a.usd)));d.append(el("div","sub",t(a.ts)+(a.why?" · "+a.why:"")));return d}):[el("div","empty","No trades in the last 3 days.")]));
  $("alerts").replaceChildren(...(s.alerts.length?s.alerts.map(a=>{const d=el("div","item");const w=el("div");w.append(document.createTextNode(a.kind==="cluster"?"🔵 Cluster ":"🔥 Trending "),link("$"+a.token,a.link));
   d.append(w,el("span","dim",t(a.ts)));return d}):[el("div","empty","No Fomo alerts yet.")]));
  $("closed").replaceChildren(...(s.closed.length?s.closed.map(c=>{const d=el("div","item");const w=el("div");w.append(link("$"+c.symbol,c.link),el("span","tag",NAMES[c.strategy]||c.strategy));
-  d.append(w,el("b",cls(c.pnl),sgn(c.pnl)+" ("+pct(c.pnl_pct)+")"));d.append(el("div","sub",t(c.closed_at)+" · held "+dur(c.closed_at-c.opened_at)+" · "+(c.exit||"")));return d}):[el("div","empty","No closed trades yet.")]));
+  d.append(w,el("b",cls(c.pnl),sgn(c.pnl)+" ("+pct(c.pnl_pct)+")"));d.append(el("div","sub",t(c.closed_at)+" · held "+dur(c.closed_at-c.opened_at)+" · "+(c.exit||"")+" · tap for chart"));
+  d.classList.add("tap");d.onclick=e=>{if(e.target.closest("a"))return;toggleChart(d,c.id)};
+  const cached=OPEN_CHARTS[c.id];if(cached&&cached!=="loading")d.append(priceChart(cached));return d}):[el("div","empty","No closed trades yet.")]));
 }
 async function load(){try{const r=await fetch("api/state?k="+encodeURIComponent(K),{cache:"no-store"});if(!r.ok)throw new Error(r.status);render(await r.json())}
  catch(e){$("health").replaceChildren(el("span","dot bad"),document.createTextNode("Can't reach the bot ("+e.message+"). Retrying…"))}}

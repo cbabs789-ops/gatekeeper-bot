@@ -33,6 +33,8 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 
 20. **Instant updates.** Every strategy sends a Telegram message the moment it buys, sells half or exits (set `GK_ALERT_STRATEGIES` to limit which). Open dashboards get each trade pushed instantly with a pop-up, instead of waiting for the next refresh.
 
+21. **Live charts and Fomo links.** Each open trade on the dashboard shows its price chart since entry with the entry, stop, take-profit and profit-lock lines and every buy and sell marked. Tap a closed trade to see how it played out. Every coin name, on the dashboard and in Telegram alerts, opens the coin in the Fomo app.
+
 ## Install (fresh Ubuntu server, as root)
 
 ```
