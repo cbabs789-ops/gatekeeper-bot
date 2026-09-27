@@ -33,7 +33,7 @@ PUMPPORTAL_API_KEY = os.environ.get("PUMPPORTAL_API_KEY", "")  # optional, not n
 
 STRATEGY_DEFAULTS = {
     # --- which coins get watched ---
-    "WATCH_HOURS": 24,              # stop recording a coin after this long
+    "WATCH_HOURS": 12,              # stop recording a coin after this long
     "DEAD_LIQ_USD": 1000,           # stop recording once the pool is this small
     # --- safety gates (hard) ---
     "MIN_LIQ_USD": 15000,
@@ -63,6 +63,8 @@ STRATEGY_DEFAULTS = {
     "PANIC_PENALTY_PCT": 5.0,       # extra cost when exiting into a liquidity pull
     # --- optional top-trader bonus (off until wallet tracking is added) ---
     "SMART_BONUS": 0,
+    # how a strategy decides to buy: "pullback" (its own rules) or "signal" (Fomo clusters)
+    "ENTRY_MODE": "pullback",
 }
 
 
@@ -75,9 +77,11 @@ PRESETS = {
         "PEAK_WITHIN_MIN": 60, "MIN_LIQ_USD": 10000, "MAX_TOP10_PCT": 35, "MAX_INSIDERS": 15,
         "MIN_M5_TXNS": 6, "MAX_OPEN": 8,
     },
+    # buys when 2+ of your Fomo traders buy the same coin and it passes safety; same exits
+    "follow": {"ENTRY_MODE": "signal", "MAX_OPEN": 8, "MIN_LIQ_USD": 10000, "MAX_TOP10_PCT": 35},
 }
 ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main").split(",") if x.strip()]
-ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,wide").split(",") if x.strip() in PRESETS]
+ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,wide,follow").split(",") if x.strip() in PRESETS]
 
 
 def strategy_params(overrides=None, preset="main"):

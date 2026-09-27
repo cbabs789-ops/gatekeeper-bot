@@ -119,6 +119,8 @@ def main():
     b.add_argument("--strategy", default="main", choices=sorted(config.PRESETS))
     sub.add_parser("setup-telegram")
     sub.add_parser("settings")
+    sw = sub.add_parser("sweep")
+    sw.add_argument("--days", type=float, default=7)
     fm = sub.add_parser("fomo")
     fm.add_argument("what", choices=["scan", "feed", "raw", "credits"])
     fm.add_argument("handle", nargs="?")
@@ -136,6 +138,9 @@ def main():
         cmd_backtest(a)
     elif a.cmd == "setup-telegram":
         sys.exit(asyncio.run(_setup_telegram()))
+    elif a.cmd == "sweep":
+        from . import sweep
+        print(plain(sweep.text(sweep.run(a.days, progress=lambda n: print("  ...%s snapshots" % format(n, ","), flush=True)))))
     elif a.cmd == "fomo":
         sys.exit(asyncio.run(_fomo(a)))
     elif a.cmd == "settings":

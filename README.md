@@ -13,6 +13,11 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 
 7. **Fomo tracking** (needs `FOMO_API_KEY` from fomoapi.io, an unofficial service). Listens to the live Fomo trade feed (free) and alerts when 2+ traders on your list buy the same coin within 30 minutes (CLUSTER) or 5+ Fomo traders pile into one coin within 15 minutes (TRENDING). Solana coins get an instant safety check and are added to the recorder. `/fomo` in Telegram shows the last 24 hours by theme; `/scan` runs a full trend scan of your traders' positions (about 10,000 of the 250,000 free monthly credits). The list of traders is `GK_FOMO_TRADERS` in `gatekeeper config`.
 
+8. **Robinhood Chain.** Coins your Fomo traders buy on Robinhood Chain get a GoPlus safety check (honeypot, taxes, mint, blacklist, owner tricks, holder concentration; LP lock is skipped for Uniswap v4 pools) and DexScreener price tracking, same as Solana.
+9. **Follow strategy.** A third paper strategy that buys when 2+ of your Fomo traders buy the same coin and it passes safety, with the same exits. Compare it against Main and Wide in the daily summary.
+10. **Rule test.** `/test` in Telegram (or `gatekeeper sweep`) replays the last 7 days of recorded coins through 15 rule variations in one pass and ranks them, split into first and second half so you can spot rules that only fit the past.
+11. **Disk saver.** Coins with pools under $7K are checked every 5 minutes instead of every 30 seconds, coins are watched for 12 hours, and history is kept 14 days. `/status` shows free disk.
+
 ## Install (fresh Ubuntu server, as root)
 
 ```

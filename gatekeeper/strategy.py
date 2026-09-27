@@ -110,6 +110,11 @@ class Strategy:
                 acts.append(a)
         return acts
 
+    def prune(self, now, idle_ms=60 * MIN):
+        """Forget coins that stopped reporting (keeps memory small on long replays)."""
+        for m in [m for m, cs in self.coins.items() if now - cs.last_ts > idle_ms and m not in self.positions]:
+            del self.coins[m]
+
     def on_tick(self, now):
         """Called once per poll cycle: closes positions whose coin stopped reporting."""
         acts = []
@@ -136,7 +141,8 @@ class Strategy:
         else:
             if not saf.get("mint_revoked"): fails.append("mint authority active")
             if not saf.get("freeze_revoked"): fails.append("freeze authority active")
-            if (saf.get("lp_locked") or 0) < p["MIN_LP_LOCKED_PCT"]: fails.append("LP %.0f%% locked" % (saf.get("lp_locked") or 0))
+            if not saf.get("lp_na") and (saf.get("lp_locked") or 0) < p["MIN_LP_LOCKED_PCT"]:
+                fails.append("LP %.0f%% locked" % (saf.get("lp_locked") or 0))
             if saf.get("top10") is not None and saf["top10"] > p["MAX_TOP10_PCT"]: fails.append("top 10 hold %.0f%%" % saf["top10"])
             if saf.get("insiders") is not None and saf["insiders"] > p["MAX_INSIDERS"]: fails.append("%d insiders" % saf["insiders"])
             if saf.get("danger"): fails.append("RugCheck: " + saf["danger"])
@@ -165,7 +171,40 @@ class Strategy:
                 "%.0f" % (saf.get("lp_locked") or 0)))
         return (not fails), why, fails
 
+    def safety_fails(self, mint, liq):
+        """Just the safety gates (used for signal entries such as Fomo clusters)."""
+        p, fails = self.p, []
+        saf = self.safety_lookup(mint)
+        if not saf:
+            return ["safety not checked"]
+        if not saf.get("mint_revoked"): fails.append("mint authority active")
+        if not saf.get("freeze_revoked"): fails.append("freeze or blacklist active")
+        if not saf.get("lp_na") and (saf.get("lp_locked") or 0) < p["MIN_LP_LOCKED_PCT"]:
+            fails.append("LP %.0f%% locked" % (saf.get("lp_locked") or 0))
+        if saf.get("top10") is not None and saf["top10"] > p["MAX_TOP10_PCT"]: fails.append("top 10 hold %.0f%%" % saf["top10"])
+        if saf.get("insiders") is not None and saf["insiders"] > p["MAX_INSIDERS"]: fails.append("%d insiders" % saf["insiders"])
+        if saf.get("danger"): fails.append(saf["danger"])
+        if liq < p["MIN_LIQ_USD"]: fails.append("pool $%.0f" % liq)
+        return fails
+
+    def signal_enter(self, mint, why):
+        """Buy on an outside signal (a Fomo cluster) if the coin passes safety."""
+        cs = self.coins.get(mint)
+        if not cs or mint in self.traded or mint in self.positions or len(self.positions) >= self.p["MAX_OPEN"]:
+            return None
+        if self.safety_fails(mint, cs.last_liq):
+            return None
+        usd = self.p["POSITION_USD"]
+        qty, fill = self.broker.buy(cs.last_price, cs.last_liq, usd)
+        pos = Position(mint, cs.symbol, cs.last_ts, fill, cs.last_price, usd, qty, qty, peak_after=cs.last_price, why=why)
+        pos.legs.append({"ts": cs.last_ts, "side": "buy", "spot": cs.last_price, "usd": usd})
+        self.positions[mint] = pos
+        self.traded.add(mint)
+        return {"type": "buy", "pos": pos, "spot": cs.last_price, "liq": cs.last_liq}
+
     def _maybe_enter(self, cs, s):
+        if self.p.get("ENTRY_MODE") == "signal":
+            return None
         if cs.mint in self.traded or len(self.positions) >= self.p["MAX_OPEN"]:
             return None
         ok, why, _ = self.entry_check(cs, s)

@@ -46,7 +46,21 @@ def connect(path=None):
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=NORMAL")
     con.executescript(SCHEMA)
+    for sql in ("ALTER TABLE coins ADD COLUMN chain TEXT DEFAULT 'solana'",
+                "ALTER TABLE coins ADD COLUMN added_at INTEGER",
+                "ALTER TABLE coins ADD COLUMN source TEXT",
+                "ALTER TABLE safety ADD COLUMN lp_na INTEGER DEFAULT 0"):
+        try:
+            con.execute(sql)
+        except sqlite3.OperationalError:
+            pass  # already there
     return con
+
+
+def save_safety(con, res):
+    con.execute("INSERT OR REPLACE INTO safety(mint, checked_at, mint_revoked, freeze_revoked, lp_locked, top10, insiders, danger, rc_score, lp_na) "
+                "VALUES(:mint,:checked_at,:mint_revoked,:freeze_revoked,:lp_locked,:top10,:insiders,:danger,:rc_score,:lp_na)",
+                dict({"lp_na": 0, "rc_score": None, "insiders": None, "top10": None, "danger": None}, **res))
 
 
 def kv_get(con, k, default=None):

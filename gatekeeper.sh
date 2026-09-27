@@ -10,6 +10,7 @@ case "${1:-help}" in
   backtest) shift; run backtest "$@" ;;
   settings) run settings ;;
   fomo)     shift; run fomo "$@" ;;
+  sweep)    shift; run sweep "$@" ;;
   logs)     journalctl -u gatekeeper -f -n 50 ;;
   restart)  sudo systemctl restart gatekeeper && echo "Restarted." ;;
   stop)     sudo systemctl stop gatekeeper && echo "Stopped. Start again with: gatekeeper restart" ;;
@@ -21,7 +22,7 @@ case "${1:-help}" in
   *) cat <<'EOF'
 gatekeeper status | report [--days N] | backtest [--days N] [--split] [--set NAME=VALUE] [--trades]
            settings | logs | restart | stop | update | config | setup-telegram
-           fomo scan | fomo feed | fomo credits | fomo raw <handle>
+           fomo scan | fomo feed | fomo credits | fomo raw <handle> | sweep [--days N]
 EOF
   ;;
 esac

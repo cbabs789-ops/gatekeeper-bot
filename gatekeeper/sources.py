@@ -14,7 +14,12 @@ log = logging.getLogger("gatekeeper.sources")
 UA = {"User-Agent": "gatekeeper-bot/1.0", "Accept": "application/json"}
 
 PUMPPORTAL_WS = "wss://pumpportal.fun/api/data"
-DEX_TOKENS = "https://api.dexscreener.com/tokens/v1/solana/"
+DEX_TOKENS = "https://api.dexscreener.com/tokens/v1/{}/"
+GOPLUS = "https://api.gopluslabs.io/api/v1/token_security/{}?contract_addresses={}"
+# chains the bot can record and safety-check
+CHAINS = {"solana": {"dex": "solana", "goplus": None}, "robinhood": {"dex": "robinhood", "goplus": "4663"}}
+EVM_RE = r"0x[0-9a-fA-F]{40}"
+SOL_RE = r"[1-9A-HJ-NP-Za-km-z]{32,44}"
 RUGCHECK_REPORT = "https://api.rugcheck.xyz/v1/tokens/{}/report"
 
 
@@ -73,6 +78,8 @@ def best_pairs(pairs):
     for p in pairs or []:
         try:
             mint = p["baseToken"]["address"]
+            if mint.startswith("0x"):
+                mint = mint.lower()
         except (KeyError, TypeError):
             continue
         liq = ((p.get("liquidity") or {}).get("usd")) or 0
@@ -103,9 +110,9 @@ def pair_to_snapshot(mint, p, ts):
     }
 
 
-async def dexscreener_batch(session, mints):
+async def dexscreener_batch(session, mints, chain="solana"):
     """Up to 30 mints per call."""
-    url = DEX_TOKENS + ",".join(mints)
+    url = DEX_TOKENS.format(CHAINS.get(chain, {}).get("dex", chain)) + ",".join(mints)
     for attempt in range(3):
         try:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as r:
@@ -175,3 +182,67 @@ async def rugcheck(session, mint):
             log.info("RugCheck error for %s: %s", mint, e)
             await asyncio.sleep(3)
     return None
+
+
+def parse_goplus(res):
+    """GoPlus token security (EVM chains) -> the same fields the gates use."""
+    def yes(k):
+        return str(res.get(k, "0")) == "1"
+    def f(k):
+        try:
+            return float(res.get(k) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    danger = []
+    if yes("is_honeypot") or yes("cannot_sell_all"): danger.append("honeypot (can't sell)")
+    if f("sell_tax") > 0.10: danger.append("sell tax %.0f%%" % (f("sell_tax") * 100))
+    if f("buy_tax") > 0.10: danger.append("buy tax %.0f%%" % (f("buy_tax") * 100))
+    if yes("can_take_back_ownership"): danger.append("owner can take back control")
+    if yes("slippage_modifiable"): danger.append("tax can be changed")
+    if yes("hidden_owner"): danger.append("hidden owner")
+    top = []
+    for h in res.get("holders") or []:
+        if str(h.get("is_contract")) == "1" or str(h.get("is_locked")) == "1" or "dead" in str(h.get("address", "")).lower():
+            continue
+        top.append(float(h.get("percent") or 0) * 100)
+    lp = res.get("lp_holders") or []
+    lp_locked = sum(float(h.get("percent") or 0) for h in lp if str(h.get("is_locked")) == "1" or "dead" in str(h.get("address", "")).lower()) * 100
+    v4 = any("v4" in str(d.get("name", "")).lower() for d in res.get("dex") or [])
+    return {
+        "mint_revoked": 0 if yes("is_mintable") else 1,
+        "freeze_revoked": 0 if (yes("transfer_pausable") or yes("is_blacklisted")) else 1,
+        "lp_locked": round(lp_locked, 2),
+        "lp_na": 1 if v4 else 0,              # Uniswap v4 pools don't lock LP the old way
+        "top10": round(sum(sorted(top, reverse=True)[:10]), 2) if top else None,
+        "insiders": None,
+        "danger": ", ".join(danger) or None,
+        "rc_score": None,
+        "holders": int(f("holder_count")),
+    }
+
+
+async def goplus(session, chain_id, addr):
+    for attempt in range(3):
+        try:
+            async with session.get(GOPLUS.format(chain_id, addr), timeout=aiohttp.ClientTimeout(total=20)) as r:
+                if r.status == 429:
+                    await asyncio.sleep(8 * (attempt + 1))
+                    continue
+                data = await r.json(content_type=None)
+                res = (data.get("result") or {})
+                tok = res.get(addr.lower()) or next(iter(res.values()), None)
+                if not tok:
+                    return None
+                return parse_goplus(tok)
+        except Exception as e:  # noqa: BLE001
+            log.info("GoPlus error for %s: %s", addr, e)
+            await asyncio.sleep(3)
+    return None
+
+
+async def safety_check(session, chain, addr):
+    """One call for any supported chain."""
+    if chain == "solana":
+        return await rugcheck(session, addr)
+    gp = CHAINS.get(chain, {}).get("goplus")
+    return await goplus(session, gp, addr) if gp else None

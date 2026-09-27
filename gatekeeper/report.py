@@ -10,7 +10,7 @@ from .notify import money
 from .strategy import summarize
 
 TZ = ZoneInfo(config.TIMEZONE)
-LABEL = {"main": "Main (strict, alerts on)", "wide": "Wide (looser, silent)"}
+LABEL = {"main": "Main (strict, alerts on)", "wide": "Wide (looser, silent)", "follow": "Follow (buys Fomo clusters, silent)"}
 
 
 def _closed(con, since_ms=None, strategy=None):
@@ -99,6 +99,12 @@ def status_text(con, strats=None):
     if day:
         lines.append("Today: %s launches seen, %s graduated" % (format(day["created"], ","), format(day["graduated"], ",")))
     lines.append("Snapshots recorded (24h): %s" % format(snaps, ","))
+    try:
+        import shutil
+        du = shutil.disk_usage(str(config.DATA_DIR))
+        lines.append("Server disk: %.1f GB free of %.1f GB%s" % (du.free / 1e9, du.total / 1e9, " ⚠️ getting low" if du.free < 1.5e9 else ""))
+    except OSError:
+        pass
     if config.os.environ.get("FOMO_API_KEY"):
         fl = con.execute("SELECT v FROM kv WHERE k='fomo_last_event'").fetchone()
         fd = con.execute("SELECT v FROM kv WHERE k='fomo_feed_delay'").fetchone()

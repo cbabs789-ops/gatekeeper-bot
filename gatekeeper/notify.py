@@ -21,8 +21,9 @@ def price(x):
     return "$%.10f" % x if x < 0.0001 else "$%.8f" % x
 
 
-def dex_link(mint):
-    return '<a href="https://dexscreener.com/solana/%s">DexScreener</a>' % mint
+def dex_link(mint, chain=None):
+    chain = chain or ("robinhood" if str(mint).startswith("0x") else "solana")
+    return '<a href="https://dexscreener.com/%s/%s">DexScreener</a>' % (chain, mint)
 
 
 def fmt_buy(pos, spot, liq, p=None):

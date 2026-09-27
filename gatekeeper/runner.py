@@ -11,8 +11,8 @@ import aiohttp
 import html
 import re
 
-from . import config, db, fomo, notify, report
-from .sources import dexscreener_batch, pair_to_snapshot, pumpportal_stream, rugcheck
+from . import config, db, fomo, notify, report, sweep
+from .sources import CHAINS, EVM_RE, SOL_RE, dexscreener_batch, pair_to_snapshot, pumpportal_stream, safety_check
 from .strategy import MIN, Position, Strategy
 
 log = logging.getLogger("gatekeeper")
@@ -37,9 +37,13 @@ class Runner:
         self.strat = self.strats.get("main") or next(iter(self.strats.values()))
         self.p = self.strat.p
         # safety checks must cover the loosest strategy
-        self.safety_min_age = min(s.p["MIN_AGE_MIN"] for s in self.strats.values())
+        rule_based = [s for s in self.strats.values() if s.p.get("ENTRY_MODE") != "signal"] or list(self.strats.values())
+        self.safety_min_age = min(s.p["MIN_AGE_MIN"] for s in rule_based)
         self.safety_min_liq = min(s.p["MIN_LIQ_USD"] for s in self.strats.values())
         self.session = None
+        self.tick = 0
+        self.last_liq = {}
+        self.sweeping = False
         for name, st in self.strats.items():
             self._restore(name, st)
 
@@ -104,11 +108,22 @@ class Runner:
         now = now_ms()
         p = self.p
         coins = {r["mint"]: dict(r) for r in self.con.execute("SELECT * FROM coins WHERE status='watching'")}
-        mints = list(coins)
-        seen = set()
-        for i in range(0, len(mints), 30):
-            batch = mints[i:i + 30]
-            pairs = await dexscreener_batch(self.session, batch)
+        self.tick += 1
+        slow_liq = float(config.os.environ.get("GK_SLOW_LIQ_USD", "7000"))
+        # coins with small pools and no open trade get checked every 5 minutes instead of every 30 seconds
+        # (saves disk on the small server; they can't be traded until their pool grows anyway)
+        def quiet(m):
+            c = coins[m]
+            return (not self.any_open(m) and self.last_liq.get(m, 1e12) < slow_liq
+                    and (now - (c.get("added_at") or c["graduated_at"])) / MIN > 45)
+        mints = [m for m in coins if self.tick % 10 == 0 or not quiet(m)]
+        seen = set(m for m in coins if m not in mints)   # skipped this round, not missing
+        batches = []
+        for chain in CHAINS:
+            cm = [m for m in mints if (coins[m].get("chain") or "solana") == chain]
+            batches += [(chain, cm[i:i + 30]) for i in range(0, len(cm), 30)]
+        for bi, (chain, batch) in enumerate(batches):
+            pairs = await dexscreener_batch(self.session, batch, chain)
             for mint, pair in pairs.items():
                 if mint not in coins:
                     continue
@@ -116,6 +131,7 @@ class Runner:
                 if not s["price"]:
                     continue
                 seen.add(mint)
+                self.last_liq[mint] = s["liq"]
                 c = coins[mint]
                 if c.get("grad_price") is None:
                     c["grad_price"] = s["price"]
@@ -130,14 +146,14 @@ class Runner:
                 for name, st in self.strats.items():
                     for a in st.on_snapshot(s, c):
                         await self.act(a, name)
-                age_min = (now - c["graduated_at"]) / MIN
+                age_min = (now - (c.get("added_at") or c["graduated_at"])) / MIN
                 if s["liq"] < p["DEAD_LIQ_USD"] and age_min > 30 and not self.any_open(mint):
                     self.con.execute("UPDATE coins SET status='dead' WHERE mint=?", (mint,))
-            if i + 30 < len(mints):
+            if bi + 1 < len(batches):
                 await asyncio.sleep(1)
         # coins DexScreener never listed, or that aged out
         for mint, c in coins.items():
-            age_min = (now - c["graduated_at"]) / MIN
+            age_min = (now - (c.get("added_at") or c["graduated_at"])) / MIN
             if self.any_open(mint):
                 continue
             if age_min > p["WATCH_HOURS"] * 60:
@@ -147,6 +163,8 @@ class Runner:
         for name, st in self.strats.items():
             for a in st.on_tick(now):
                 await self.act(a, name)
+            if self.tick % 20 == 0:
+                st.prune(now, 30 * MIN)
         db.kv_set(self.con, "last_poll", now)
         db.kv_set(self.con, "watching", len(mints))
 
@@ -156,23 +174,21 @@ class Runner:
             try:
                 now = now_ms()
                 rows = self.con.execute(
-                    "SELECT c.mint, c.graduated_at, "
+                    "SELECT c.mint, c.graduated_at, c.chain, c.source, "
                     "(SELECT liq FROM snapshots s WHERE s.mint=c.mint ORDER BY ts DESC LIMIT 1) AS liq "
                     "FROM coins c WHERE c.status='watching'").fetchall()
                 for r in rows:
                     age = (now - r["graduated_at"]) / MIN
-                    if age < self.safety_min_age - 8 or (r["liq"] or 0) < self.safety_min_liq * 0.7:
+                    if (r["source"] != "fomo" and age < self.safety_min_age - 8) or (r["liq"] or 0) < self.safety_min_liq * 0.7:
                         continue
                     have = self.safety.get(r["mint"])
                     if have and now - have["checked_at"] < 45 * MIN:
                         continue
-                    res = await rugcheck(self.session, r["mint"])
+                    res = await safety_check(self.session, r["chain"] or "solana", r["mint"])
                     if res:
                         res.update(mint=r["mint"], checked_at=now_ms())
                         self.safety[r["mint"]] = res
-                        self.con.execute(
-                            "INSERT OR REPLACE INTO safety VALUES(:mint,:checked_at,:mint_revoked,:freeze_revoked,"
-                            ":lp_locked,:top10,:insiders,:danger,:rc_score)", res)
+                        db.save_safety(self.con, res)
                     await asyncio.sleep(2)
             except Exception:  # noqa: BLE001
                 log.exception("Safety loop error")
@@ -213,38 +229,62 @@ class Runner:
             head = "🔥 <b>TRENDING ON FOMO: %d traders bought $%s</b> in the last 15 min (%s total)" % (
                 len(buyers), html.escape(str(info["token"])), notify.money(sum(v for _, v in buyers)))
         lines = [head, "Buyers: " + who + more]
-        solana = chain in ("solana", "sol", "") and re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}", addr or "")
-        if solana:
-            saf = await rugcheck(self.session, addr)
-            pairs = await dexscreener_batch(self.session, [addr])
+        if chain in ("sol", ""):
+            chain = "solana" if re.fullmatch(SOL_RE, addr or "") else chain
+        if chain == "robinhood" and re.fullmatch(EVM_RE, addr or ""):
+            addr = addr.lower()
+        ok_addr = (chain == "solana" and re.fullmatch(SOL_RE, addr or "")) or (chain == "robinhood" and re.fullmatch(EVM_RE, addr or ""))
+        if chain in CHAINS and ok_addr:
+            saf = await safety_check(self.session, chain, addr)
+            pairs = await dexscreener_batch(self.session, [addr], chain)
             pair = pairs.get(addr)
-            fails = []
+            snap = pair_to_snapshot(addr, pair, now_ms()) if pair else None
             if saf:
-                if not saf["mint_revoked"]: fails.append("mint authority active")
-                if not saf["freeze_revoked"]: fails.append("freeze authority active")
-                if (saf["lp_locked"] or 0) < self.p["MIN_LP_LOCKED_PCT"]: fails.append("LP only %.0f%% locked" % (saf["lp_locked"] or 0))
-                if saf.get("top10") is not None and saf["top10"] > self.p["MAX_TOP10_PCT"]: fails.append("top 10 hold %.0f%%" % saf["top10"])
-                if saf.get("insiders") is not None and saf["insiders"] > self.p["MAX_INSIDERS"]: fails.append("%d insiders" % saf["insiders"])
-                if saf.get("danger"): fails.append(saf["danger"])
-                self.safety[addr] = dict(saf, mint=addr, checked_at=now_ms())
-            else:
-                fails.append("RugCheck unavailable")
-            if pair:
-                snap = pair_to_snapshot(addr, pair, now_ms())
-                if snap["liq"] < self.p["MIN_LIQ_USD"]: fails.append("pool only %s" % notify.money(snap["liq"]))
-                lines.append("Pool %s · mkt cap %s · 1h %s" % (notify.money(snap["liq"]), notify.money(snap["fdv"]),
-                                                              "%+.0f%%" % snap["pc_h1"] if snap["pc_h1"] is not None else "n/a"))
-                # start recording it so the paper traders and backtests see it too
+                saf = dict(saf, mint=addr, checked_at=now_ms())
+                self.safety[addr] = saf
+                db.save_safety(self.con, saf)
+            fails = self.strat.safety_fails(addr, snap["liq"] if snap else 0) if saf else ["safety check unavailable"]
+            if snap:
+                lines.append("Pool %s · mkt cap %s · 1h %s · %s" % (
+                    notify.money(snap["liq"]), notify.money(snap["fdv"]),
+                    "%+.0f%%" % snap["pc_h1"] if snap["pc_h1"] is not None else "n/a", chain.title()))
+                # record it so the paper traders and backtests see it too
                 if not self.con.execute("SELECT 1 FROM coins WHERE mint=?", (addr,)).fetchone():
                     created = pair.get("pairCreatedAt") or now_ms()
-                    self.con.execute("INSERT INTO coins(mint, symbol, name, graduated_at, last_seen, status) VALUES(?,?,?,?,?,'watching')",
-                                     (addr, snap["_symbol"], snap["_name"], int(created), now_ms()))
-            lines.append(("✅ Passes safety" if not fails else "⛔ Fails safety: " + "; ".join(fails)))
-            lines.append(notify.dex_link(addr))
+                    self.con.execute("INSERT INTO coins(mint, symbol, name, graduated_at, grad_price, last_seen, status, chain, added_at, source) "
+                                     "VALUES(?,?,?,?,?,?,'watching',?,?,'fomo')",
+                                     (addr, snap["_symbol"], snap["_name"], int(created), snap["price"], now_ms(), chain, now_ms()))
+                coin = dict(self.con.execute("SELECT * FROM coins WHERE mint=?", (addr,)).fetchone())
+                for name, st in self.strats.items():
+                    st.on_snapshot(dict(snap), coin)
+                    if kind == "cluster" and st.p.get("ENTRY_MODE") == "signal":
+                        a = st.signal_enter(addr, "Fomo cluster: " + ", ".join("@" + h for h, _ in buyers[:4]))
+                        if a:
+                            await self.act(a, name)
+            if saf and saf.get("lp_na") and not fails:
+                lines.append("✅ Passes safety (Uniswap v4 pool, so LP lock doesn't apply)")
+            else:
+                lines.append("✅ Passes safety" if not fails else "⛔ Fails safety: " + "; ".join(fails))
+            lines.append(notify.dex_link(addr, chain))
         else:
-            lines.append("Chain: %s (safety checks only cover Solana)" % html.escape(chain or "unknown"))
+            lines.append("Chain: %s (safety checks cover Solana and Robinhood Chain)" % html.escape(chain or "unknown"))
         lines.append("Following a crowd means you're buying after them. Check the chart before acting.")
         await notify.send(self.session, "\n".join(lines))
+
+    async def run_sweep(self):
+        if self.sweeping:
+            await notify.send(self.session, "A rule test is already running. Results will show up here when it's done.")
+            return
+        self.sweeping = True
+        await notify.send(self.session, "🧪 Testing 15 rule variations on the last 7 days of recorded coins. This takes 10 to 30 minutes on the small server; alerts keep working meanwhile.")
+        try:
+            res = await asyncio.to_thread(sweep.run, 7)
+            await notify.send(self.session, sweep.text(res))
+        except Exception as e:  # noqa: BLE001
+            log.exception("Sweep failed")
+            await notify.send(self.session, "Rule test failed: %s" % html.escape(str(e)[:300]))
+        finally:
+            self.sweeping = False
 
     async def run_scan(self):
         await notify.send(self.session, "🔎 Running the Fomo trend scan (about 40 traders, roughly 10,000 of your 250,000 monthly credits). Takes a minute or two.")
@@ -279,8 +319,10 @@ class Runner:
                         await notify.send(self.session, fomo.feed_report(self.con, 24))
                     elif cmd in ("/scan", "scan"):
                         asyncio.create_task(self.run_scan())
+                    elif cmd in ("/sweep", "sweep", "/test", "test"):
+                        asyncio.create_task(self.run_sweep())
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/test: replay recorded coins through 15 rule variations (10 to 30 min)")
             except Exception as e:  # noqa: BLE001
                 log.warning("Telegram poll error: %s", e)
                 await asyncio.sleep(10)
@@ -299,7 +341,7 @@ class Runner:
                     if fomo.key():
                         await self.run_scan()
             if now.hour == 4 and db.kv_get(self.con, "pruned") != key:
-                keep = int(float(__import__("os").environ.get("GK_KEEP_DAYS", "90")))
+                keep = int(float(__import__("os").environ.get("GK_KEEP_DAYS", "14")))
                 self.con.execute("DELETE FROM snapshots WHERE ts < ?", (now_ms() - keep * 86400000,))
                 fomo.ensure_schema(self.con)
                 self.con.execute("DELETE FROM fomo_events WHERE ts < ?", (now_ms() - 30 * 86400000,))
