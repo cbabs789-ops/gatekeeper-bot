@@ -271,6 +271,15 @@ class Runner:
         lines.append("Following a crowd means you're buying after them. Check the chart before acting.")
         await notify.send(self.session, "\n".join(lines))
 
+    async def scorecard_loop(self):
+        while True:
+            try:
+                if fomo.key():
+                    await fomo.price_calls(self.session, self.con, dexscreener_batch, pair_to_snapshot)
+            except Exception:  # noqa: BLE001
+                log.exception("Scorecard pricing failed")
+            await asyncio.sleep(60)
+
     async def run_sweep(self):
         if self.sweeping:
             await notify.send(self.session, "A rule test is already running. Results will show up here when it's done.")
@@ -319,10 +328,12 @@ class Runner:
                         await notify.send(self.session, fomo.feed_report(self.con, 24))
                     elif cmd in ("/scan", "scan"):
                         asyncio.create_task(self.run_scan())
+                    elif cmd in ("/traders", "traders", "/scorecard"):
+                        await notify.send(self.session, fomo.scorecard_text(self.con))
                     elif cmd in ("/sweep", "sweep", "/test", "test"):
                         asyncio.create_task(self.run_sweep())
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/test: replay recorded coins through 17 rule variations (10 to 30 min)")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through 17 rule variations (10 to 30 min)")
             except Exception as e:  # noqa: BLE001
                 log.warning("Telegram poll error: %s", e)
                 await asyncio.sleep(10)
@@ -338,6 +349,8 @@ class Runner:
                     await notify.send(self.session, fomo.feed_report(self.con, 24))
                 if now.weekday() == 6:
                     await notify.send(self.session, "🗓 <b>Weekly recap</b>\n" + report.period_text(self.con, hours=24 * 7, header=False))
+                    if fomo.key():
+                        await notify.send(self.session, fomo.scorecard_text(self.con))
                     if fomo.key():
                         await self.run_scan()
             if now.hour == 4 and db.kv_get(self.con, "pruned") != key:
@@ -356,7 +369,7 @@ class Runner:
             await asyncio.gather(
                 fomo.Feed(self.con, self.on_fomo_alert).run(),
                 pumpportal_stream(self.on_event, config.PUMPPORTAL_API_KEY),
-                self.poll_loop(), self.safety_loop(), self.telegram_loop(), self.daily_loop())
+                self.poll_loop(), self.safety_loop(), self.telegram_loop(), self.daily_loop(), self.scorecard_loop())
 
 
 def main():

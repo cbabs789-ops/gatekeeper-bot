@@ -40,6 +40,13 @@ CREATE TABLE IF NOT EXISTS fomo_events (
 CREATE INDEX IF NOT EXISTS fomo_ts ON fomo_events(ts);
 CREATE INDEX IF NOT EXISTS fomo_tok ON fomo_events(token_address, ts);
 CREATE TABLE IF NOT EXISTS fomo_alerts (token_address TEXT, kind TEXT, ts INTEGER);
+CREATE TABLE IF NOT EXISTS trader_calls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  trader TEXT, token_address TEXT, symbol TEXT, chain TEXT, ts INTEGER, usd REAL,
+  p0 REAL, liq0 REAL, p1h REAL, p6h REAL, p24h REAL, liq24h REAL, done INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS calls_open ON trader_calls(done, ts);
+CREATE INDEX IF NOT EXISTS calls_trader ON trader_calls(trader, token_address, ts);
 """
 
 
@@ -321,6 +328,19 @@ class Feed:
             buyers[r["trader"]] = buyers.get(r["trader"], 0) + (r["usd"] or 0)
         return buyers
 
+    def _record_call(self, m, addr, now):
+        """Scorecard: every buy by a trader on your list, priced now and again later."""
+        trader = m.get("trader") or ""
+        chain = (m.get("chain") or "").lower()
+        if trader.lower() not in self.watch or chain not in ("solana", "robinhood"):
+            return
+        a = addr.lower() if addr.startswith("0x") else addr
+        dup = self.con.execute("SELECT 1 FROM trader_calls WHERE trader=? AND token_address=? AND ts>?",
+                               (trader, a, now - 6 * 3600 * 1000)).fetchone()
+        if not dup:
+            self.con.execute("INSERT INTO trader_calls(trader, token_address, symbol, chain, ts, usd) VALUES(?,?,?,?,?,?)",
+                             (trader, a, m.get("token") or "", chain, now, _num(m.get("usdValue")) or 0))
+
     def _alerted(self, addr, kind, now):
         r = self.con.execute("SELECT MAX(ts) t FROM fomo_alerts WHERE token_address=? AND kind=?", (addr, kind)).fetchone()
         return r["t"] and now - r["t"] < 6 * 3600 * 1000
@@ -335,6 +355,7 @@ class Feed:
                           _num(m.get("usdValue")) or 0, json.dumps(m)[:2000]))
         if m["alertType"] != "buy" or (_num(m.get("usdValue")) or 0) < self.min_usd:
             return
+        self._record_call(m, addr, now)
         info = {"token": m.get("token"), "address": addr, "chain": m.get("chain") or ""}
         cl = self._recent(addr, now - self.CLUSTER_WINDOW, True)
         if len(cl) >= self.cluster_n and not self._alerted(addr, "cluster", now):
@@ -415,4 +436,96 @@ def feed_report(con, hours=24):
     for k, t in sorted(toks.items(), key=lambda kv: len(kv[1]["traders"]), reverse=True)[:8]:
         extra = " · your list: %s" % ", ".join("@" + x for x in sorted(t["watch"])[:4]) if t["watch"] else ""
         L.append("$%s (%s): %d buyers, net %s%s" % (t["sym"], t["chain"] or "?", len(t["traders"]), money(t["buy"] - t["sell"]), extra))
+    return "\n".join(L)
+
+
+# ------------------------------------------------------------------ trader scorecard
+CHECKPOINTS = (("p0", 0), ("p1h", 3600 * 1000), ("p6h", 6 * 3600 * 1000), ("p24h", 24 * 3600 * 1000))
+
+
+async def price_calls(session, con, dex_batch, pair_to_snapshot):
+    """Fill in the price of each call at buy time, +1h, +6h and +24h."""
+    ensure_schema(con)
+    now = int(time.time() * 1000)
+    rows = con.execute("SELECT * FROM trader_calls WHERE done=0 ORDER BY ts LIMIT 400").fetchall()
+    due = defaultdict(list)          # chain -> [(row, column)]
+    for r in rows:
+        for col, delay in CHECKPOINTS:
+            if r[col] is None and now >= r["ts"] + delay:
+                # a checkpoint missed by more than 2 hours stays empty rather than getting a wrong price
+                if col != "p0" and now > r["ts"] + delay + 2 * 3600 * 1000:
+                    continue
+                due[r["chain"]].append((r, col))
+                break
+    for chain, items in due.items():
+        addrs = list(dict.fromkeys(r["token_address"] for r, _ in items))
+        prices = {}
+        for i in range(0, len(addrs), 30):
+            pairs = await dex_batch(session, addrs[i:i + 30], chain)
+            for a, p in pairs.items():
+                snap = pair_to_snapshot(a, p, now)
+                prices[a] = (snap["price"], snap["liq"])
+            await asyncio.sleep(1)
+        for r, col in items:
+            pr = prices.get(r["token_address"])
+            if not pr and col == "p0":
+                continue
+            price, liq = pr if pr else (0.0, 0.0)     # not listed any more counts as gone
+            if col == "p0":
+                con.execute("UPDATE trader_calls SET p0=?, liq0=? WHERE id=?", (price, liq, r["id"]))
+            elif col == "p24h":
+                con.execute("UPDATE trader_calls SET p24h=?, liq24h=?, done=1 WHERE id=?", (price, liq, r["id"]))
+            else:
+                con.execute("UPDATE trader_calls SET %s=? WHERE id=?" % col, (price, r["id"]))
+    # calls whose last checkpoint is long past get closed so they stop being checked
+    con.execute("UPDATE trader_calls SET done=1 WHERE done=0 AND ts < ?", (now - 27 * 3600 * 1000,))
+
+
+def _pct(a, b):
+    return (b / a - 1) * 100 if a and b is not None else None
+
+
+def scorecard(con, days=14, min_calls=5):
+    ensure_schema(con)
+    since = int(time.time() * 1000) - days * 86400000
+    rows = con.execute("SELECT * FROM trader_calls WHERE ts>=? AND p0>0", (since,)).fetchall()
+    by = defaultdict(list)
+    for r in rows:
+        by[r["trader"]].append(r)
+    out = []
+    for t, rs in by.items():
+        r1 = [_pct(r["p0"], r["p1h"]) for r in rs if r["p1h"] is not None]
+        r6 = [_pct(r["p0"], r["p6h"]) for r in rs if r["p6h"] is not None]
+        r24 = [_pct(r["p0"], r["p24h"]) for r in rs if r["p24h"] is not None]
+        drained = sum(1 for r in rs if r["liq24h"] is not None and r["liq0"] and r["liq24h"] < r["liq0"] * 0.2)
+        def med(v):
+            v = sorted(x for x in v if x is not None)
+            return v[len(v) // 2] if v else None
+        out.append({"trader": t, "calls": len(rs), "scored": len(r6),
+                    "med1h": med(r1), "med6h": med(r6), "med24h": med(r24),
+                    "win6h": (sum(1 for x in r6 if x is not None and x > 10) / len(r6) * 100) if r6 else None,
+                    "drained": drained, "done24": len(r24)})
+    return out
+
+
+def scorecard_text(con, days=14):
+    rows = scorecard(con, days)
+    if not rows:
+        return "No scored buys yet. The scorecard fills in as your traders buy (each buy is checked 1h, 6h and 24h later)."
+    ranked = [r for r in rows if r["scored"] >= 5]
+    early = [r for r in rows if r["scored"] < 5]
+    def f(x):
+        return "n/a" if x is None else "%+.0f%%" % x
+    L = ["🏅 <b>Trader scorecard</b> (last %d days)" % days,
+         "What happened to each coin after they bought it. Median change 1h / 6h / 24h later · share of buys up 10%+ at 6h · buys that drained within 24h\n"]
+    ranked.sort(key=lambda r: (r["med6h"] if r["med6h"] is not None else -1e9), reverse=True)
+    for i, r in enumerate(ranked):
+        tag = "✅ " if (r["med6h"] or -1) > 0 and (r["win6h"] or 0) >= 40 else ("⛔ " if (r["med6h"] or 0) < -20 else "")
+        L.append("%s<b>@%s</b>: %d buys · %s / %s / %s · %s win · %d drained" % (
+            tag, r["trader"], r["calls"], f(r["med1h"]), f(r["med6h"]), f(r["med24h"]),
+            "n/a" if r["win6h"] is None else "%.0f%%" % r["win6h"], r["drained"]))
+    if early:
+        L.append("\nStill collecting (under 5 scored buys): " + ", ".join("@%s (%d)" % (r["trader"], r["scored"]) for r in
+                                                                     sorted(early, key=lambda r: -r["scored"])[:20]))
+    L.append("\n✅ = coins tend to rise after they buy · ⛔ = coins tend to dump after they buy. Judge a trader after 15+ buys.")
     return "\n".join(L)

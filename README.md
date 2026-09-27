@@ -18,6 +18,9 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 10. **Rule test.** `/test` in Telegram (or `gatekeeper sweep`) replays the last 7 days of recorded coins through 15 rule variations in one pass and ranks them, split into first and second half so you can spot rules that only fit the past.
 11. **Disk saver.** Coins with pools under $7K are checked every 5 minutes instead of every 30 seconds, coins are watched for 12 hours, and history is kept 14 days. `/status` shows free disk.
 
+12. **Trader scorecard.** Every buy by a trader on your Fomo list (Solana and Robinhood Chain) is priced when it happens and again 1, 6 and 24 hours later. `/traders` ranks them by what their coins did after they bought: median change, share of buys up 10%+ at 6 hours, and how many drained. Sent with the Sunday recap too. Free: uses the live feed and DexScreener.
+13. **Dev history.** RugCheck's list of the creator's earlier coins is stored with each safety check, with optional gates (`MAX_DEV_PREV_COINS`, `MAX_DEV_DEAD_COINS`) that `/test` evaluates.
+
 ## Install (fresh Ubuntu server, as root)
 
 ```

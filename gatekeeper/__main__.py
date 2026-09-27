@@ -90,6 +90,8 @@ async def _fomo(a):
     async with aiohttp.ClientSession() as s:
         if a.what == "credits":
             print("FOMO API credits used this month: %s of 250,000" % format(fomo.Client(s, con).credits_used(), ","))
+        elif a.what == "traders":
+            print(plain(fomo.scorecard_text(con)))
         elif a.what == "feed":
             print(plain(fomo.feed_report(con, 24)))
         elif a.what == "raw":
@@ -122,7 +124,7 @@ def main():
     sw = sub.add_parser("sweep")
     sw.add_argument("--days", type=float, default=7)
     fm = sub.add_parser("fomo")
-    fm.add_argument("what", choices=["scan", "feed", "raw", "credits"])
+    fm.add_argument("what", choices=["scan", "feed", "raw", "credits", "traders"])
     fm.add_argument("handle", nargs="?")
     a = ap.parse_args()
 
