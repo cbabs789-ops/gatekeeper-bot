@@ -27,10 +27,11 @@ API = "https://api.fomoapi.io"
 WS = "wss://api.fomoapi.io/ws/alerts?key={}"
 MIN = 60_000
 
-DEFAULT_TRADERS = ("bigbabba,Onepeterrr,DegenCapitalLLC,xandereef,0xangeryy,quakerrz,tonkadriving,soldax,wsbmod,songz,"
-                   "horseimnot,MoonDat,zolandinho,Oura456,CryptoKvon,cashmachine,AltcoinMiyagi,0xNoshy,seralberttrades,"
-                   "Iri0o,sol_engineer,rbthreek,pointfarmcap,THEpurestInu,pedrigavifrenki,figaro,pennylane,bamblewood8,"
-                   "FullNosyCobra,Aurelius0121,px_721,smileycapital,Salem1299534,CorporateMund0,badabeepp,Chadwardthewise")
+DEFAULT_TRADERS = ("bigbabba,Onepeterrr,pointfarmcap,Salem1299534,AvgJoesCrypto,bluntz_capital,seralberttrades,"
+                   "DegenCapitalLLC,xandereef,0xangeryy,quakerrz,tonkadriving,soldax,wsbmod,songz,horseimnot,MoonDat,"
+                   "zolandinho,Oura456,CryptoKvon,cashmachine,AltcoinMiyagi,0xNoshy,Iri0o,sol_engineer,rbthreek,"
+                   "THEpurestInu,pedrigavifrenki,figaro,pennylane,bamblewood8,FullNosyCobra,px_721,smileycapital,"
+                   "CorporateMund0,badabeepp,Chadwardthewise")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS fomo_events (
