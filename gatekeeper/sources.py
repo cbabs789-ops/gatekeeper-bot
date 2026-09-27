@@ -107,7 +107,27 @@ def pair_to_snapshot(mint, p, ts):
         "_symbol": (p.get("baseToken") or {}).get("symbol"),
         "_name": (p.get("baseToken") or {}).get("name"),
         "_pair": p.get("pairAddress"), "_dex": p.get("dexId"),
+        "_socials": socials_of(p),
     }
+
+
+def socials_of(p):
+    """What a coin shows on DexScreener: 'x,tg,web,boost' style tags ('' if nothing)."""
+    info = p.get("info") or {}
+    tags = set()
+    for so in info.get("socials") or []:
+        t = str(so.get("type") or so.get("platform") or "").lower()
+        if t in ("twitter", "x"):
+            tags.add("x")
+        elif t == "telegram":
+            tags.add("tg")
+        elif t:
+            tags.add("other")
+    if info.get("websites"):
+        tags.add("web")
+    if ((p.get("boosts") or {}).get("active") or 0) > 0:
+        tags.add("boost")
+    return ",".join(sorted(tags))
 
 
 async def dexscreener_batch(session, mints, chain="solana"):

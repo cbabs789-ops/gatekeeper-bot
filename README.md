@@ -25,6 +25,10 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 
 15. **Live dashboard.** The bot serves a read-only web page at `http://<server-ip>:8080/?k=<key>`: profit and loss per strategy with equity curves, open paper trades valued at what they'd sell for right now, every buy and sell as it happens, Fomo alerts and closed trades. Refreshes every 10 seconds. Send `/site` in Telegram for your link. P/L counts from the last time a strategy's rules changed (detected automatically; `/reset main` starts a fresh count by hand, history is kept). Coins with open paper trades are priced every 10 seconds instead of 30. Set `GK_WEB_PORT` or `GK_WEB_KEY` in `gatekeeper config` to change the port or key.
 
+16. **Trader-sold alerts.** When a trader on your list sells a coin you got a cluster or trending alert on (or a paper trade holds), you get a 🟠 message. `SELL_WITH_TRADERS=1` makes a signal strategy exit when a trader who got it in sells; `/testfollow` tests that rule.
+17. **Research report.** `/research` (and every Sunday): which coin themes rose after Fomo traders bought, whether coins with an X account, website or paid boost did better, and which safety warnings actually predicted dead coins.
+18. **Real vs paper.** After a real trade, `/fill SYMBOL PRICE` (price per coin, or market cap like `250k`) logs your fill next to the paper bot's. `/fills` shows how far real results run from paper.
+
 ## Install (fresh Ubuntu server, as root)
 
 ```

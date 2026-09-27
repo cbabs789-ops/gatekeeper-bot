@@ -74,6 +74,10 @@ def watchlist():
 
 def ensure_schema(con):
     con.executescript(SCHEMA)
+    try:
+        con.execute("ALTER TABLE trader_calls ADD COLUMN socials TEXT")
+    except Exception:  # noqa: BLE001
+        pass  # already there
 
 
 # ------------------------------------------------------------------ themes
@@ -322,8 +326,9 @@ class Feed:
     CLUSTER_WINDOW = 30 * MIN
     CROWD_WINDOW = 15 * MIN
 
-    def __init__(self, con, on_alert, on_track=None):
+    def __init__(self, con, on_alert, on_track=None, on_sell=None):
         self.con = con
+        self.on_sell = on_sell            # async fn(trader, address, chain, usd, symbol): a list trader sold
         self.on_alert = on_alert          # async fn(kind, info)
         self.on_track = on_track          # fn(address, chain): start recording prices for a coin
         ensure_schema(con)
@@ -367,6 +372,11 @@ class Feed:
         self.con.execute("INSERT INTO fomo_events VALUES(?,?,?,?,?,?,?,?)",
                          (now, m.get("trader") or "", m["alertType"], m.get("token") or "", addr, m.get("chain") or "",
                           _num(m.get("usdValue")) or 0, json.dumps(m)[:2000]))
+        if m["alertType"] == "sell" and self.on_sell and (m.get("trader") or "").lower() in self.watch:
+            a, chain = covered(addr, m.get("chain"))
+            if a:
+                await self.on_sell(m.get("trader"), a, chain, _num(m.get("usdValue")) or 0, m.get("token") or "")
+            return
         if m["alertType"] != "buy" or (_num(m.get("usdValue")) or 0) < self.min_usd:
             return
         self._record_call(m, addr, now)
@@ -484,15 +494,15 @@ async def price_calls(session, con, dex_batch, pair_to_snapshot):
             pairs = await dex_batch(session, addrs[i:i + 30], chain)
             for a, p in pairs.items():
                 snap = pair_to_snapshot(a, p, now)
-                prices[a] = (snap["price"], snap["liq"])
+                prices[a] = (snap["price"], snap["liq"], snap.get("_socials"))
             await asyncio.sleep(1)
         for r, col in items:
             pr = prices.get(r["token_address"])
             if not pr and col == "p0":
                 continue
-            price, liq = pr if pr else (0.0, 0.0)     # not listed any more counts as gone
+            price, liq, soc = pr if pr else (0.0, 0.0, None)     # not listed any more counts as gone
             if col == "p0":
-                con.execute("UPDATE trader_calls SET p0=?, liq0=? WHERE id=?", (price, liq, r["id"]))
+                con.execute("UPDATE trader_calls SET p0=?, liq0=?, socials=? WHERE id=?", (price, liq, soc, r["id"]))
             elif col == "p24h":
                 con.execute("UPDATE trader_calls SET p24h=?, liq24h=?, done=1 WHERE id=?", (price, liq, r["id"]))
             else:

@@ -3,6 +3,7 @@
 Pure logic, no network. The live runner and the backtester both feed it the
 same snapshot rows, so a backtest result is what the live bot would have done.
 """
+import re
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -211,6 +212,19 @@ class Strategy:
         self.positions[mint] = pos
         self.traded.add(mint)
         return {"type": "buy", "pos": pos, "spot": cs.last_price, "liq": cs.last_liq}
+
+    @staticmethod
+    def leaders(pos):
+        """Traders named in a position's reason, e.g. 'Fomo cluster: @a, @b' -> {'a', 'b'}."""
+        return {h.lower() for h in re.findall(r"@([A-Za-z0-9_.-]+)", pos.why or "")}
+
+    def leader_sold(self, mint, trader, ts):
+        """A trader who got us into this coin sold. Exits only if SELL_WITH_TRADERS is on."""
+        pos = self.positions.get(mint)
+        cs = self.coins.get(mint)
+        if not pos or not cs or not self.p.get("SELL_WITH_TRADERS") or trader.lower() not in self.leaders(pos):
+            return []
+        return self._close(pos, cs, max(ts, cs.last_ts), cs.last_price, cs.last_liq, "Trader sold (@%s)" % trader)
 
     def _maybe_enter(self, cs, s):
         if self.p.get("ENTRY_MODE") == "signal":

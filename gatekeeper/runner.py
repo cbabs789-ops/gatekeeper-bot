@@ -12,7 +12,7 @@ import aiohttp
 import html
 import re
 
-from . import config, db, fomo, followtest, notify, report, sweep, web
+from . import config, db, fomo, followtest, notify, report, research, sweep, web
 from .sources import CHAINS, EVM_RE, SOL_RE, dexscreener_batch, pair_to_snapshot, pumpportal_stream, safety_check
 from .strategy import MIN, Position, Strategy
 
@@ -47,6 +47,7 @@ class Runner:
         self.last_liq = {}
         self.sweeping = False
         self.tracking = set()
+        self.sell_warned = {}
         self.epochs = {}
         for name, st in self.strats.items():
             self._epoch(name, st)
@@ -157,8 +158,8 @@ class Runner:
                 if c.get("grad_price") is None:
                     c["grad_price"] = s["price"]
                 self.con.execute("UPDATE coins SET symbol=COALESCE(symbol,?), name=COALESCE(name,?), pair=?, dex=?, "
-                                 "grad_price=COALESCE(grad_price,?), last_seen=? WHERE mint=?",
-                                 (s["_symbol"], s["_name"], s["_pair"], s["_dex"], s["price"], now, mint))
+                                 "grad_price=COALESCE(grad_price,?), last_seen=?, socials=? WHERE mint=?",
+                                 (s["_symbol"], s["_name"], s["_pair"], s["_dex"], s["price"], now, s["_socials"], mint))
                 if not c.get("symbol"):
                     c["symbol"] = s["_symbol"]
                 self.con.execute("INSERT INTO snapshots VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -325,6 +326,104 @@ class Runner:
         lines.append("Following a crowd means you're buying after them. Check the chart before acting.")
         await notify.send(self.session, "\n".join(lines))
 
+    def _research(self):
+        return research.text(db.connect())
+
+    # ------------------------------------------------------------ real fills vs paper
+    def record_fill(self, args):
+        """/fill SYMBOL PRICE  (price per token, or market cap like 250k / 1.2m). First fill = your buy, next = your sell."""
+        if len(args) < 2:
+            return ("Send it like: /fill PIKASTR 0.00123 (price per coin) or /fill PIKASTR 250k (market cap).\n"
+                    "Your first /fill for a coin is your buy, the next one is your sell.")
+        sym = args[0].lstrip("$").upper()
+        raw = args[1].lower().replace("$", "").replace(",", "")
+        mult = 1e3 if raw.endswith("k") else 1e6 if raw.endswith("m") else 1
+        try:
+            val = float(raw.rstrip("km")) * mult
+        except ValueError:
+            return "Couldn't read %s as a number." % html.escape(args[1])
+        t = self.con.execute("SELECT * FROM trades WHERE mode='live' AND upper(symbol)=? ORDER BY opened_at DESC LIMIT 1", (sym,)).fetchone()
+        if not t:
+            return "No paper trade found for $%s. Use the symbol from the alert." % html.escape(sym)
+        snap = self.con.execute("SELECT price, fdv FROM snapshots WHERE mint=? ORDER BY ts DESC LIMIT 1", (t["mint"],)).fetchone()
+        is_mc = mult > 1 or (snap and snap["price"] and val > snap["price"] * 1000)
+        if is_mc:
+            if not snap or not snap["price"] or not snap["fdv"]:
+                return "Can't convert market cap for $%s (no recent price). Send the price per coin instead." % html.escape(sym)
+            val = val * snap["price"] / snap["fdv"]
+        self.con.execute("CREATE TABLE IF NOT EXISTS real_fills (id INTEGER PRIMARY KEY AUTOINCREMENT, trade_id INTEGER, ts INTEGER, side TEXT, price REAL)")
+        has_buy = self.con.execute("SELECT 1 FROM real_fills WHERE trade_id=? AND side='buy'", (t["id"],)).fetchone()
+        side = "sell" if has_buy else "buy"
+        self.con.execute("INSERT INTO real_fills(trade_id, ts, side, price) VALUES(?,?,?,?)", (t["id"], now_ms(), side, val))
+        legs = json.loads(t["legs"] or "[]")
+        if side == "buy":
+            paper = legs[0]["spot"] if legs else t["entry_price"]
+            diff = (val / paper - 1) * 100
+            return ("✍️ Your buy of $%s logged. Paper bot bought at %s, you at %s: you paid %+.1f%% %s." % (
+                html.escape(t["symbol"]), notify.price(paper), notify.price(val), diff, "more" if diff > 0 else "less")
+                + "\nSend /fill %s PRICE again when you sell." % html.escape(t["symbol"]))
+        sells = [g for g in legs if g.get("side") == "sell"]
+        if not sells:
+            return "✍️ Your sell of $%s logged. The paper bot is still holding, so there's nothing to compare yet." % html.escape(t["symbol"])
+        paper = sells[-1]["spot"]
+        diff = (val / paper - 1) * 100
+        return "✍️ Your sell of $%s logged. Paper bot sold at %s, you at %s: you got %+.1f%% %s." % (
+            html.escape(t["symbol"]), notify.price(paper), notify.price(val), diff, "more" if diff > 0 else "less")
+
+    def fills_text(self):
+        try:
+            rows = self.con.execute("SELECT f.side, f.price, t.symbol, t.legs FROM real_fills f JOIN trades t ON t.id=f.trade_id").fetchall()
+        except Exception:  # noqa: BLE001
+            rows = []
+        if not rows:
+            return "No real fills logged yet. After a real trade, send /fill SYMBOL PRICE."
+        buys, sells = [], []
+        for r in rows:
+            legs = json.loads(r["legs"] or "[]")
+            if r["side"] == "buy" and legs:
+                buys.append((r["price"] / legs[0]["spot"] - 1) * 100)
+            elif r["side"] == "sell":
+                s = [g for g in legs if g.get("side") == "sell"]
+                if s:
+                    sells.append((r["price"] / s[-1]["spot"] - 1) * 100)
+        avg = lambda v: sum(v) / len(v) if v else 0  # noqa: E731
+        return ("📏 <b>Real vs paper</b>\nBuys: %d, you paid %+.1f%% vs the bot on average (positive = worse)\n"
+                "Sells: %d, you got %+.1f%% vs the bot on average (negative = worse)\n"
+                "Rough real-money edge vs paper per round trip: %+.1f%%") % (
+            len(buys), avg(buys), len(sells), avg(sells), avg(sells) - avg(buys))
+
+    async def on_trader_sell(self, trader, addr, chain, usd, symbol):
+        """A trader on your list sold. Exit paper trades that follow them (if set), and warn you if you
+        were alerted on this coin or a paper trade holds it."""
+        now = now_ms()
+        held = []
+        for name, st in self.strats.items():
+            pos = st.positions.get(addr)
+            if not pos:
+                continue
+            is_leader = trader.lower() in Strategy.leaders(pos)
+            acts = st.leader_sold(addr, trader, now)
+            for a in acts:
+                await self.act(a, name)
+            if is_leader or name in config.ALERT_PRESETS:
+                held.append("%s%s" % (report.LABEL.get(name, name).split(" (")[0], " (sold with them)" if acts else ""))
+        alerted = self.con.execute("SELECT kind FROM fomo_alerts WHERE (token_address=? OR (? AND lower(token_address)=?)) AND ts>? "
+                                   "ORDER BY ts DESC LIMIT 1", (addr, addr.startswith("0x"), addr, now - 12 * 3600 * 1000)).fetchone()
+        if not held and not alerted:
+            return
+        k = (trader.lower(), addr)
+        if now - self.sell_warned.get(k, 0) < 6 * 3600 * 1000:
+            return
+        self.sell_warned[k] = now
+        lines = ["🟠 <b>@%s is selling $%s</b> (%s)" % (html.escape(trader), html.escape(symbol or addr[:6]), notify.money(usd))]
+        if alerted:
+            lines.append("You got a %s alert on this coin in the last 12 hours." % ("cluster" if alerted["kind"] == "cluster" else "trending"))
+        if held:
+            lines.append("Paper trades in it: " + ", ".join(held))
+        lines.append(notify.dex_link(addr, chain))
+        lines.append("If you copied them in, this is your cue to check the chart.")
+        await notify.send(self.session, "\n".join(lines))
+
     def track_coin(self, addr, chain):
         """Start recording prices for a coin one of your list traders bought (feeds the Follow test)."""
         m = followtest.norm(addr, chain)
@@ -422,6 +521,12 @@ class Runner:
                         asyncio.create_task(self.run_scan())
                     elif cmd in ("/traders", "traders", "/scorecard"):
                         await notify.send(self.session, fomo.scorecard_text(self.con))
+                    elif cmd in ("/research", "research"):
+                        await notify.send(self.session, await asyncio.to_thread(self._research))
+                    elif cmd in ("/fill", "fill"):
+                        await notify.send(self.session, self.record_fill((msg.get("text") or "").split()[1:]))
+                    elif cmd in ("/fills", "fills"):
+                        await notify.send(self.session, self.fills_text())
                     elif cmd in ("/reset", "reset"):
                         parts = (msg.get("text") or "").split()
                         which = [w.lower() for w in parts[1:] if w.lower() in self.strats] or list(self.strats)
@@ -437,7 +542,7 @@ class Runner:
                     elif cmd in ("/sweep", "sweep", "/test", "test"):
                         asyncio.create_task(self.run_sweep())
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through 17 rule variations (10 to 30 min)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through 17 rule variations (10 to 30 min)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)")
                     elif cmd.startswith("/"):
                         await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
             except Exception as e:  # noqa: BLE001
@@ -458,6 +563,7 @@ class Runner:
                     if fomo.key():
                         await notify.send(self.session, fomo.scorecard_text(self.con))
                     if fomo.key():
+                        await notify.send(self.session, await asyncio.to_thread(self._research))
                         await self.run_followtest()
                         await self.run_scan()
             if now.hour == 4 and db.kv_get(self.con, "pruned") != key:
@@ -479,7 +585,7 @@ class Runner:
             except Exception:  # noqa: BLE001
                 log.exception("Dashboard failed to start")
             await asyncio.gather(
-                fomo.Feed(self.con, self.on_fomo_alert, self.track_coin).run(),
+                fomo.Feed(self.con, self.on_fomo_alert, self.track_coin, self.on_trader_sell).run(),
                 pumpportal_stream(self.on_event, config.PUMPPORTAL_API_KEY),
                 self.poll_loop(), self.fast_loop(), self.safety_loop(), self.telegram_loop(), self.daily_loop(), self.scorecard_loop())
 

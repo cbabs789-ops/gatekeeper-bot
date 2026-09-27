@@ -26,6 +26,8 @@ VARIANTS = [
     ("2+ traders, take half at 1.5x", {"sig": "list", "n": 2}, {"TAKE_HALF_X": 1.5}),
     ("2+ traders, sell everything after 1h", {"sig": "list", "n": 2}, {"MAX_HOLD_MIN": 60}),
     ("2+ traders, pool $50K+", {"sig": "list", "n": 2}, {"MIN_LIQ_USD": 50000}),
+    ("2+ traders, sell when the first of them sells", {"sig": "list", "n": 2}, {"SELL_WITH_TRADERS": 1}),
+    ("Any 1 trader, sell when they sell", {"sig": "list", "n": 1}, {"SELL_WITH_TRADERS": 1}),
     ("2+ traders, no safety check (reference only)", {"sig": "list", "n": 2, "no_safety": True}, {}),
     ("2+ traders, zero trading costs (reference only)", {"sig": "list", "n": 2}, {"FEE_PCT": 0, "PENALTY_PCT": 0, "PANIC_PENALTY_PCT": 0}),
 ]
@@ -46,7 +48,8 @@ def norm(addr, chain):
 
 
 def signals(buys, watch, v):
-    """buys: {mint: [(ts, trader, usd), ...] sorted}. Returns {mint: signal_ts} (first time the rule fires)."""
+    """buys: {mint: [(ts, trader, usd), ...] sorted}. Returns {mint: (signal_ts, leaders)}:
+    the first time the rule fires, and the traders who made it fire."""
     out = {}
     min_usd = v.get("min_usd", 200)
     for mint, rows in buys.items():
@@ -55,12 +58,12 @@ def signals(buys, watch, v):
                 who = {t.lower() for (t2, t, u) in rows[:i + 1]
                        if t2 >= ts - LIST_WINDOW and t.lower() in watch and u >= min_usd}
                 if len(who) >= v["n"]:
-                    out[mint] = ts
+                    out[mint] = (ts, who)
                     break
             else:
                 win = [(t, u) for (t2, t, u) in rows[:i + 1] if t2 >= ts - CROWD_WINDOW]
                 if len({t for t, _ in win}) >= v["n"] and sum(u for _, u in win) >= 5000:
-                    out[mint] = ts
+                    out[mint] = (ts, {t.lower() for t, _ in win})
                     break
     return out
 
@@ -81,6 +84,11 @@ def run(days=7):
             buys.setdefault(m, []).append((r["ts"], r["trader"] or "", r["usd"] or 0))
     if not buys:
         return None
+    sells = {}
+    for r in con.execute("SELECT ts, trader, token_address, chain FROM fomo_events WHERE side='sell' AND ts>=? ORDER BY ts", (since,)):
+        m = norm(r["token_address"], r["chain"])
+        if m and m in buys and (r["trader"] or "").lower() in watch:
+            sells.setdefault(m, []).append((r["ts"], (r["trader"] or "").lower()))
 
     strats = []
     for label, v, ov in VARIANTS:
@@ -90,8 +98,11 @@ def run(days=7):
         if v.get("no_safety"):
             p["MIN_LIQ_USD"] = 0
         sig = signals(buys, watch, v)
-        pending = {m: ts + v.get("delay", 0) * MIN for m, ts in sig.items()}
-        strats.append({"label": label, "st": Strategy(p, look), "pending": pending, "signals": len(sig), "missed": 0})
+        pending = {m: ts + v.get("delay", 0) * MIN for m, (ts, _) in sig.items()}
+        leaders = {m: who for m, (_, who) in sig.items()}
+        strats.append({"label": label, "st": Strategy(p, look), "pending": pending, "leaders": leaders,
+                       "sells": {m: list(v2) for m, v2 in sells.items()} if p.get("SELL_WITH_TRADERS") else {},
+                       "signals": len(sig), "missed": 0})
 
     mints = set()
     for s in strats:
@@ -122,13 +133,21 @@ def run(days=7):
         for s in strats:
             st = s["st"]
             st.on_snapshot(snap, c)          # signal mode: never enters on its own
+            q = s["sells"].get(m)
+            if q and m in st.positions:
+                pos = st.positions[m]
+                while q and q[0][0] <= ts:
+                    sell_ts, who = q.pop(0)
+                    if sell_ts >= pos.opened_at and who in s["leaders"].get(m, ()):
+                        st._close(pos, st.coins[m], ts, snap["price"], snap["liq"], "Trader sold (@%s)" % who)
+                        break
             due = s["pending"].get(m)
             if due is not None and ts >= due:
                 del s["pending"][m]
                 if ts - due > MISS_AFTER:
                     s["missed"] += 1
                 else:
-                    st.signal_enter(m, s["label"])
+                    st.signal_enter(m, "Test: " + ", ".join("@" + w for w in sorted(s["leaders"].get(m, ()))))
     out = []
     mid = None
     opened = [c.opened_at for s in strats for c in s["st"].closed] + [p.opened_at for s in strats for p in s["st"].positions.values()]

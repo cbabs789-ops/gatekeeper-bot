@@ -52,7 +52,8 @@ def connect(path=None):
                 "ALTER TABLE safety ADD COLUMN lp_na INTEGER DEFAULT 0",
                 "ALTER TABLE safety ADD COLUMN creator TEXT",
                 "ALTER TABLE safety ADD COLUMN creator_prev INTEGER",
-                "ALTER TABLE safety ADD COLUMN creator_dead INTEGER"):
+                "ALTER TABLE safety ADD COLUMN creator_dead INTEGER",
+                "ALTER TABLE coins ADD COLUMN socials TEXT"):
         try:
             con.execute(sql)
         except sqlite3.OperationalError:

@@ -67,6 +67,8 @@ STRATEGY_DEFAULTS = {
     "SMART_BONUS": 0,
     # how a strategy decides to buy: "pullback" (its own rules) or "signal" (Fomo clusters)
     "ENTRY_MODE": "pullback",
+    # signal strategies: 1 = sell as soon as a trader who got us in sells (tested in /testfollow)
+    "SELL_WITH_TRADERS": 0,
 }
 
 
