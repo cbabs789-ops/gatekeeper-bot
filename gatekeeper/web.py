@@ -309,7 +309,7 @@ const cls=v=>v>0?"up":v<0?"down":"dim";
 const pct=v=>v==null?"n/a":(v>0?"+":"")+v.toFixed(1)+"%";
 const t=ms=>{const d=new Date(ms);return d.toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})};
 const dur=ms=>{const m=Math.round(ms/60000);return m<60?m+"m":Math.floor(m/60)+"h "+(m%60)+"m"};
-const NAMES={main:"Main",wide:"Wide",follow:"Follow"};
+const NAMES={main:"Main",wide:"Wide",follow:"Follow",momentum:"Momentum"};
 function link(txt,href){if(!href)return el("span",null,txt);const a=el("a",null,txt);a.href=href;a.target="_blank";a.rel="noopener";return a}
 function spark(pts){const ns="http://www.w3.org/2000/svg",s=document.createElementNS(ns,"svg");s.setAttribute("viewBox","0 0 300 70");s.setAttribute("preserveAspectRatio","none");
  if(!pts||pts.length<2)return s;const ys=pts.map(p=>p[1]).concat([0]);const lo=Math.min(...ys),hi=Math.max(...ys),r=(hi-lo)||1;

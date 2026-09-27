@@ -10,7 +10,7 @@ from .notify import money
 from .strategy import summarize
 
 TZ = ZoneInfo(config.TIMEZONE)
-LABEL = {"main": "Main (strict rules)", "wide": "Wide (newer coins, looser)", "follow": "Follow (copies your Fomo traders)"}
+LABEL = {"main": "Main (strict rules)", "wide": "Wide (newer coins, looser)", "follow": "Follow (copies your Fomo traders)", "momentum": "Momentum (day-trader style)"}
 
 
 def _closed(con, since_ms=None, strategy=None):

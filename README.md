@@ -37,6 +37,8 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 
 22. **Moonbag.** `MOONBAG_PCT` keeps a slice of a winning trade (after it has taken profit) with no 6-hour limit and a wide 50% trailing stop, to catch the rare coin that runs 10x to 100x. `/test` and `/testfollow` compare it. Recorded data only covers 12 hours per coin, so the test understates multi-day runs.
 
+23. **Momentum strategy (day-trader style).** Buys safe new coins (5 min to 4 hours old) that are breaking out: up 15 to 150% in 5 minutes, within 10% of their high, buyers 1.3x sellers, 25+ trades in 5 minutes, pool $12K+ and holding. Takes half at 1.4x, stops at -15%, locks gains once up 15%, never lets a 20% gain turn into a loss, exits on heavy selling or a draining pool, 90-minute limit, keeps a 20% moonbag. `/test` includes six Momentum variations.
+
 ## Install (fresh Ubuntu server, as root)
 
 ```

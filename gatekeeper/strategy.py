@@ -156,22 +156,40 @@ class Strategy:
             if saf.get("creator_dead") is not None and saf["creator_dead"] > p["MAX_DEV_DEAD_COINS"]:
                 fails.append("dev has %d dead coins" % saf["creator_dead"])
         runup = cs.peak_price / cs.grad_price if cs.grad_price else 0
-        if runup < p["MIN_RUNUP_X"]:
-            fails.append("hasn't run (%.1fx)" % runup)
         pull = (1 - s["price"] / cs.peak_price) * 100 if cs.peak_price else 0
-        if not (p["PULLBACK_MIN_PCT"] <= pull <= p["PULLBACK_MAX_PCT"]):
-            fails.append("pullback %.0f%%" % pull)
-        if (s["ts"] - cs.peak_ts) / MIN > p["PEAK_WITHIN_MIN"]:
-            fails.append("peak is stale")
         b, se = s.get("buys_m5") or 0, s.get("sells_m5") or 0
+        mom = None
+        if p.get("ENTRY_MODE") == "momentum":
+            ref5 = cs.at_or_after(s["ts"] - 5 * MIN)
+            if not ref5 or ref5[0] > s["ts"] - 4 * MIN or not ref5[1]:
+                fails.append("not enough price history yet")
+            else:
+                mom = (s["price"] / ref5[1] - 1) * 100
+                if mom < p["MOM_MIN_PCT"]:
+                    fails.append("no momentum (%+.0f%% in 5m)" % mom)
+                elif mom > p["MOM_MAX_PCT"]:
+                    fails.append("too vertical (%+.0f%% in 5m)" % mom)
+            if pull > p["MOM_NEAR_HIGH_PCT"]:
+                fails.append("%.0f%% off its high" % pull)
+            if b < se * p["MOM_BUY_RATIO"]:
+                fails.append("buyers not dominant (%d/%d)" % (b, se))
+        else:
+            if runup < p["MIN_RUNUP_X"]:
+                fails.append("hasn't run (%.1fx)" % runup)
+            if not (p["PULLBACK_MIN_PCT"] <= pull <= p["PULLBACK_MAX_PCT"]):
+                fails.append("pullback %.0f%%" % pull)
+            if (s["ts"] - cs.peak_ts) / MIN > p["PEAK_WITHIN_MIN"]:
+                fails.append("peak is stale")
+            if b < se:
+                fails.append("sellers winning (%d/%d)" % (b, se))
         if b + se < p["MIN_M5_TXNS"]:
             fails.append("quiet (%d trades in 5m)" % (b + se))
-        if b < se:
-            fails.append("sellers winning (%d/%d)" % (b, se))
         ref = cs.at_or_after(s["ts"] - 10 * MIN)
         if ref and ref[2] > 0 and s["liq"] < ref[2] * p["LIQ_HOLD_PCT"] / 100:
             fails.append("liquidity falling")
-        why = ["%.0f min since graduation" % age, "ran %.1fx, now %.0f%% off the peak" % (runup, pull),
+        move = ("breaking out: %+.0f%% in 5 min, %.0f%% off its high" % (mom, pull)) if p.get("ENTRY_MODE") == "momentum" and mom is not None \
+            else "ran %.1fx, now %.0f%% off the peak" % (runup, pull)
+        why = ["%.0f min since graduation" % age, move,
                "%d buys vs %d sells in 5m" % (b, se), "liquidity $%s" % format(int(s["liq"]), ",")]
         if saf:
             why.append("top 10 hold %s%%, %s insiders, LP %s%% locked" % (

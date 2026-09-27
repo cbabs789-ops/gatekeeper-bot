@@ -80,6 +80,11 @@ STRATEGY_DEFAULTS = {
     "MOONBAG_PCT": 0,               # % of the original position kept when the rest is sold (0 = off)
     "MOON_TRAIL_PCT": 50,           # the moonbag sells only if price falls this far from its best
     "MOON_MAX_HOURS": 72,           # ...or after this long
+    # --- momentum entries (ENTRY_MODE "momentum"): buy strength, not dips ---
+    "MOM_MIN_PCT": 15,              # price up at least this much in the last 5 min
+    "MOM_MAX_PCT": 150,             # ...but not more (don't buy a vertical candle)
+    "MOM_NEAR_HIGH_PCT": 10,        # and within this much of its high (breaking out, not fading)
+    "MOM_BUY_RATIO": 1.3,           # buys at least 1.3x sells in the last 5 min
 }
 
 
@@ -94,9 +99,17 @@ PRESETS = {
     },
     # buys when 2+ of your Fomo traders buy the same coin and it passes safety; same exits
     "follow": {"ENTRY_MODE": "signal", "MAX_OPEN": 8, "MIN_LIQ_USD": 10000, "MAX_TOP10_PCT": 35},
+    # active day-trader style: buys new coins breaking out, takes profit fast, cuts losers fast, keeps a small moonbag
+    "momentum": {
+        "ENTRY_MODE": "momentum", "MIN_AGE_MIN": 5, "MAX_AGE_MIN": 240, "MIN_LIQ_USD": 12000,
+        "MAX_TOP10_PCT": 30, "MAX_INSIDERS": 10, "MIN_M5_TXNS": 25, "LIQ_HOLD_PCT": 90, "MAX_OPEN": 10,
+        "TAKE_HALF_X": 1.4, "STOP_LOSS_PCT": 15, "TRAIL_PCT": 15, "MAX_HOLD_MIN": 90,
+        "LOCK_START_PCT": 15, "LOCK_TRAIL_PCT": 12, "BREAKEVEN_AT_PCT": 20,
+        "SELL_PRESSURE_EXIT": 1, "LIQ_DRAIN_PCT": 12, "MOONBAG_PCT": 20, "MOON_TRAIL_PCT": 40,
+    },
 }
 ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main,wide,follow").split(",") if x.strip()]
-ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,wide,follow").split(",") if x.strip() in PRESETS]
+ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,wide,follow,momentum").split(",") if x.strip() in PRESETS]
 
 
 def strategy_params(overrides=None, preset="main"):

@@ -41,6 +41,13 @@ VARIANTS = [
     # --- moonbag: keep a slice after taking profit to catch the rare huge runner ---
     ("New coins + 20% moonbag", {"MOONBAG_PCT": 20}, "wide"),
     ("New coins + all protections + 20% moonbag", dict(PROTECT, MOONBAG_PCT=20), "wide"),
+    # --- momentum (day-trader style): buy breakouts, quick profits, tight stops ---
+    ("Momentum (as set)", {}, "momentum"),
+    ("Momentum, stronger breakouts only (+25% in 5 min)", {"MOM_MIN_PCT": 25}, "momentum"),
+    ("Momentum, pool $25K+", {"MIN_LIQ_USD": 25000}, "momentum"),
+    ("Momentum, take half at 1.25x", {"TAKE_HALF_X": 1.25}, "momentum"),
+    ("Momentum, no moonbag", {"MOONBAG_PCT": 0}, "momentum"),
+    ("Momentum, wider stop (-25%)", {"STOP_LOSS_PCT": 25}, "momentum"),
 ]
 
 
