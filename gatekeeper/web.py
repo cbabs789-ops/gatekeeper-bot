@@ -53,6 +53,21 @@ def _stats(rows):
             "best": round(s.get("best", 0), 2), "worst": round(s.get("worst", 0), 2)}
 
 
+def _supply(con, mint, cache={}):
+    now = time.time()
+    hit = cache.get(mint)
+    if hit and now - hit[1] < 300:
+        return hit[0]
+    r = con.execute("SELECT price, fdv FROM snapshots WHERE mint=? AND price>0 AND fdv>0 ORDER BY ts DESC LIMIT 1", (mint,)).fetchone()
+    v = r["fdv"] / r["price"] if r else None
+    cache[mint] = (v, now)
+    return v
+
+
+def _mc(spot, sup):
+    return round(spot * sup) if spot and sup else None
+
+
 def chart_data(con, mint, t0, t1, entry, legs):
     """Price path around a trade as % change from our entry, plus our buy and sell points."""
     rows = con.execute("SELECT ts, price FROM snapshots WHERE mint=? AND ts>=? AND ts<=? ORDER BY ts",
@@ -112,6 +127,7 @@ def state(runner):
                 "size": pos.size_usd, "value_if_sold": round(pos.proceeds + value, 2), "pnl": round(pnl, 2),
                 "pnl_pct": round(pnl / pos.size_usd * 100, 1), "move_pct": round((price / pos.spot_at_entry - 1) * 100, 1) if pos.spot_at_entry else None,
                 "took_half": pos.took_half, "liq": round(liq), "why": pos.why,
+                "mc_in": _mc(pos.spot_at_entry, _supply(con, mint)), "mc_now": _mc(price, _supply(con, mint)),
                 "stop_at": round(pos.spot_at_entry * (1 - st.p["STOP_LOSS_PCT"] / 100), 12),
                 "chart": dict(chart_data(con, mint, pos.opened_at, now, pos.spot_at_entry, pos.legs),
                               levels=_levels(st.p, pos, pos.spot_at_entry)) if pos.spot_at_entry else None})
@@ -128,7 +144,14 @@ def state(runner):
         out["equity"][name] = pts[::step] + (pts[-1:] if pts and (len(pts) - 1) % step else [])
 
     for r in con.execute("SELECT * FROM trades WHERE mode='live' AND closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 50"):
-        out["closed"].append({"id": r["id"], "strategy": r["run_id"] or "main", "symbol": r["symbol"], "link": _link(r["mint"]),
+        try:
+            lg = json.loads(r["legs"] or "[]")
+        except ValueError:
+            lg = []
+        sup = _supply(con, r["mint"])
+        sells = [g for g in lg if g.get("side") == "sell"]
+        out["closed"].append({"mc_in": _mc(lg[0].get("spot") if lg else None, sup), "mc_out": _mc(sells[-1].get("spot") if sells else None, sup),
+                              "id": r["id"], "strategy": r["run_id"] or "main", "symbol": r["symbol"], "link": _link(r["mint"]),
                               "opened_at": r["opened_at"], "closed_at": r["closed_at"], "pnl": round(r["pnl_usd"] or 0, 2),
                               "pnl_pct": round(r["pnl_pct"] or 0, 1), "exit": r["exit_reason"], "why": r["why_entered"]})
 
@@ -140,6 +163,7 @@ def state(runner):
             continue
         for g in legs:
             acts.append({"ts": g.get("ts"), "strategy": r["run_id"] or "main", "symbol": r["symbol"], "link": _link(r["mint"]),
+                         "mc": _mc(g.get("spot"), _supply(con, r["mint"])),
                          "side": g.get("side"), "usd": round(g.get("usd") or 0, 2), "why": g.get("why") or ""})
     out["activity"] = sorted(acts, key=lambda a: a["ts"] or 0, reverse=True)[:60]
 
@@ -308,6 +332,7 @@ const sgn=v=>(v>0?"+":"")+money(v);
 const cls=v=>v>0?"up":v<0?"down":"dim";
 const pct=v=>v==null?"n/a":(v>0?"+":"")+v.toFixed(1)+"%";
 const t=ms=>{const d=new Date(ms);return d.toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})};
+const mcf=v=>{if(!v)return null;const u=[[1e9,"B"],[1e6,"M"],[1e3,"K"]];for(const[d,x]of u)if(v>=d)return "$"+(+(v/d).toFixed(2))+x+" MC";return "$"+v+" MC"};
 const dur=ms=>{const m=Math.round(ms/60000);return m<60?m+"m":Math.floor(m/60)+"h "+(m%60)+"m"};
 const NAMES={main:"Main",wide:"Wide",follow:"Follow",momentum:"Momentum"};
 function link(txt,href){if(!href)return el("span",null,txt);const a=el("a",null,txt);a.href=href;a.target="_blank";a.rel="noopener";return a}
@@ -353,14 +378,16 @@ function render(s){
  const o=s.open.sort((a,b)=>b.opened_at-a.opened_at);
  $("open").replaceChildren(...(o.length?o.map(p=>{const d=el("div","item");const n=link("$"+p.symbol,p.link);const w=el("div");w.append(n,el("span","tag",NAMES[p.strategy]||p.strategy));if(p.took_half)w.append(el("span","tag","sold half"));
   d.append(w,el("b",cls(p.pnl),sgn(p.pnl)+" ("+pct(p.pnl_pct)+")"));
+  if(p.mc_in)d.append(el("div","sub","Bought at "+mcf(p.mc_in)+" · now "+(mcf(p.mc_now)||"?")));
   d.append(el("div","sub","Price "+pct(p.move_pct)+" since entry · held "+dur(s.now-p.opened_at)+" · pool "+money(p.liq).replace(".00","")+" · $"+p.size+" in, worth "+money(p.value_if_sold)+" if sold"));
   if(p.why)d.append(el("div","sub","Why: "+p.why));if(p.chart)d.append(priceChart(p.chart));return d}):[el("div","empty","No open trades. He's waiting for a setup.")]));
  $("activity").replaceChildren(...(s.activity.length?s.activity.map(a=>{const d=el("div","item");const w=el("div");const icon=a.side==="buy"?"🟢 Bought ":"🔴 Sold ";w.append(document.createTextNode(icon),link("$"+a.symbol,a.link),el("span","tag",NAMES[a.strategy]||a.strategy));
-  d.append(w,el("span","dim",money(a.usd)));d.append(el("div","sub",t(a.ts)+(a.why?" · "+a.why:"")));return d}):[el("div","empty","No trades in the last 3 days.")]));
+  d.append(w,el("span","dim",money(a.usd)));d.append(el("div","sub",t(a.ts)+(a.mc?" · at "+mcf(a.mc):"")+(a.why?" · "+a.why:"")));return d}):[el("div","empty","No trades in the last 3 days.")]));
  $("alerts").replaceChildren(...(s.alerts.length?s.alerts.map(a=>{const d=el("div","item");const w=el("div");w.append(document.createTextNode(a.kind==="cluster"?"🔵 Cluster ":"🔥 Trending "),link("$"+a.token,a.link));
   d.append(w,el("span","dim",t(a.ts)));return d}):[el("div","empty","No Fomo alerts yet.")]));
  $("closed").replaceChildren(...(s.closed.length?s.closed.map(c=>{const d=el("div","item");const w=el("div");w.append(link("$"+c.symbol,c.link),el("span","tag",NAMES[c.strategy]||c.strategy));
-  d.append(w,el("b",cls(c.pnl),sgn(c.pnl)+" ("+pct(c.pnl_pct)+")"));d.append(el("div","sub",t(c.closed_at)+" · held "+dur(c.closed_at-c.opened_at)+" · "+(c.exit||"")+" · tap for chart"));
+  d.append(w,el("b",cls(c.pnl),sgn(c.pnl)+" ("+pct(c.pnl_pct)+")"));if(c.mc_in)d.append(el("div","sub","Bought at "+mcf(c.mc_in)+(c.mc_out?" → sold at "+mcf(c.mc_out):"")));
+  d.append(el("div","sub",t(c.closed_at)+" · held "+dur(c.closed_at-c.opened_at)+" · "+(c.exit||"")+" · tap for chart"));
   d.classList.add("tap");d.onclick=e=>{if(e.target.closest("a"))return;toggleChart(d,c.id)};
   const cached=OPEN_CHARTS[c.id];if(cached&&cached!=="loading")d.append(priceChart(cached));return d}):[el("div","empty","No closed trades yet.")]));
 }

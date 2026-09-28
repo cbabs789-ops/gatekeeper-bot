@@ -271,6 +271,11 @@ class Runner:
             await asyncio.sleep(20)
 
     # ------------------------------------------------------------ actions -> db + telegram
+    def supply(self, mint):
+        """Token supply (market cap / price) from the latest snapshot, for showing market caps."""
+        r = self.con.execute("SELECT price, fdv FROM snapshots WHERE mint=? AND price>0 AND fdv>0 ORDER BY ts DESC LIMIT 1", (mint,)).fetchone()
+        return r["fdv"] / r["price"] if r else None
+
     async def act(self, a, name="main"):
         pos = a["pos"]
         alert = name in config.ALERT_PRESETS
@@ -282,16 +287,16 @@ class Runner:
                 (name, pos.mint, pos.symbol, pos.opened_at, pos.entry_price, pos.size_usd, pos.qty_total, pos.why, json.dumps(pos.legs)))
             pos.trade_id = cur.lastrowid
             if alert:
-                await notify.send(self.session, tag + notify.fmt_buy(pos, a["spot"], a["liq"], self.strats[name].p))
+                await notify.send(self.session, tag + notify.fmt_buy(pos, a["spot"], a["liq"], self.strats[name].p, self.supply(pos.mint)))
         elif a["type"] == "partial":
             self.con.execute("UPDATE trades SET legs=? WHERE id=?", (json.dumps(pos.legs), pos.trade_id))
             if alert:
-                await notify.send(self.session, tag + notify.fmt_partial(pos, a["spot"], a["usd"], a.get("why")))
+                await notify.send(self.session, tag + notify.fmt_partial(pos, a["spot"], a["usd"], a.get("why"), self.supply(pos.mint)))
         elif a["type"] == "close":
             self.con.execute("UPDATE trades SET closed_at=?, proceeds_usd=?, pnl_usd=?, pnl_pct=?, exit_reason=?, legs=? WHERE id=?",
                              (pos.closed_at, pos.proceeds, pos.pnl_usd, pos.pnl_pct, pos.exit_reason, json.dumps(pos.legs), pos.trade_id))
             if alert:
-                await notify.send(self.session, tag + notify.fmt_close(pos, a["spot"], a["reason"]))
+                await notify.send(self.session, tag + notify.fmt_close(pos, a["spot"], a["reason"], self.supply(pos.mint)))
         try:
             web.HUB.publish({"type": a["type"], "strategy": name, "symbol": pos.symbol,
                              "usd": round(a.get("usd") or (pos.size_usd if a["type"] == "buy" else pos.proceeds), 2),

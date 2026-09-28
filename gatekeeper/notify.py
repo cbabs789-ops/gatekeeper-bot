@@ -32,9 +32,21 @@ def fomo_url(mint, chain=None):
     return "https://fomo.family/tokens/%s/%s" % (chain, mint)
 
 
-def fmt_buy(pos, spot, liq, p=None):
+def mcap(spot, supply):
+    """Market cap at a given price, e.g. '$760K MC' (blank if supply unknown)."""
+    if not supply or not spot:
+        return ""
+    v = spot * supply
+    for div, suf in ((1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if v >= div:
+            return "$%s%s MC" % (("%.2f" % (v / div)).rstrip("0").rstrip("."), suf)
+    return "$%.0f MC" % v
+
+
+def fmt_buy(pos, spot, liq, p=None, supply=None):
     p = p or {"TAKE_HALF_X": 2.0, "STOP_LOSS_PCT": 30, "MAX_HOLD_MIN": 360}
-    return ("🟢 <b>PAPER BUY ${sym}</b>\n"
+    mc = mcap(spot, supply)
+    return ("🟢 <b>PAPER BUY ${sym}</b>" + (" at <b>%s</b>" % mc if mc else "") + "\n"
             "Spot {spot} · filled {fill} after costs\n"
             "Size {size} · pool ${liq}\n\n"
             "<b>Why:</b> {why}\n\n"
@@ -44,19 +56,21 @@ def fmt_buy(pos, spot, liq, p=None):
         liq=format(int(liq), ","), why=html.escape(pos.why), link=dex_link(pos.mint))
 
 
-def fmt_partial(pos, spot, usd, why=None):
+def fmt_partial(pos, spot, usd, why=None, supply=None):
+    at = mcap(spot, supply) or price(spot)
     if why and "moonbag" in why:
         return "🌙 <b>Took profit on ${}</b> at {} · locked {}\n{}. The moonbag rides until it falls far from its high. {}".format(
-            html.escape(pos.symbol), price(spot), money(usd), html.escape(why), dex_link(pos.mint))
+            html.escape(pos.symbol), at, money(usd), html.escape(why), dex_link(pos.mint))
     return "🟡 <b>Took half on ${}</b> at {} · locked {}\nRest rides with a trailing stop. {}".format(
-        html.escape(pos.symbol), price(spot), money(usd), dex_link(pos.mint))
+        html.escape(pos.symbol), at, money(usd), dex_link(pos.mint))
 
 
-def fmt_close(pos, spot, reason):
+def fmt_close(pos, spot, reason, supply=None):
     icon = "✅" if pos.pnl_usd > 0 else "🔴"
     mins = int((pos.closed_at - pos.opened_at) / 60000)
-    return "{} <b>PAPER SELL ${}</b>: {}\nExit {} · held {}h{:02d}m\nResult <b>{} ({:+.1f}%)</b> on {}\n{}".format(
-        icon, html.escape(pos.symbol), html.escape(reason), price(spot), mins // 60, mins % 60,
+    ex = ("%s → %s" % (mcap(pos.spot_at_entry, supply), mcap(spot, supply))) if supply else price(spot)
+    return "{} <b>PAPER SELL ${}</b>: {}\nBought → sold: {} · held {}h{:02d}m\nResult <b>{} ({:+.1f}%)</b> on {}\n{}".format(
+        icon, html.escape(pos.symbol), html.escape(reason), ex, mins // 60, mins % 60,
         money(pos.pnl_usd), pos.pnl_pct, money(pos.size_usd), dex_link(pos.mint))
 
 
