@@ -64,6 +64,13 @@ def _supply(con, mint, cache={}):
     return v
 
 
+def _coin_stats(con, mint):
+    """Latest market numbers for a coin, like Fomo's header: volume, buys vs sells, 1h change."""
+    r = con.execute("SELECT vol_m5, vol_h1, buys_m5, sells_m5, buys_h1, sells_h1, pc_m5, pc_h1 FROM snapshots "
+                    "WHERE mint=? ORDER BY ts DESC LIMIT 1", (mint,)).fetchone()
+    return dict(r) if r else None
+
+
 def _mc(spot, sup):
     return round(spot * sup) if spot and sup else None
 
@@ -128,6 +135,7 @@ def state(runner):
                 "pnl_pct": round(pnl / pos.size_usd * 100, 1), "move_pct": round((price / pos.spot_at_entry - 1) * 100, 1) if pos.spot_at_entry else None,
                 "took_half": pos.took_half, "liq": round(liq), "why": pos.why,
                 "mc_in": _mc(pos.spot_at_entry, _supply(con, mint)), "mc_now": _mc(price, _supply(con, mint)),
+                "stats": _coin_stats(con, mint),
                 "stop_at": round(pos.spot_at_entry * (1 - st.p["STOP_LOSS_PCT"] / 100), 12),
                 "chart": dict(chart_data(con, mint, pos.opened_at, now, pos.spot_at_entry, pos.legs),
                               levels=_levels(st.p, pos, pos.spot_at_entry)) if pos.spot_at_entry else None})
@@ -303,6 +311,10 @@ svg{width:100%;height:70px;display:block;margin-top:8px}
 footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 .chart{grid-column:1/-1;margin-top:6px}.chart svg{height:150px;margin:0}
 .item.tap{cursor:pointer}.hint{font-size:11px;color:var(--dim)}
+.stats{grid-column:1/-1;display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:6px 0 2px}
+.stat{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+.stat .k{font-size:10.5px}.stat .v{font-size:14px;margin:0}
+@media(max-width:420px){.stats{grid-template-columns:repeat(2,1fr)}}
 .legend{grid-column:1/-1;font-size:11px;color:var(--dim);display:flex;gap:10px;flex-wrap:wrap}
 .legend i{display:inline-block;width:12px;height:0;border-top:2px dashed;vertical-align:middle;margin-right:4px}
 #toasts{position:fixed;left:50%;transform:translateX(-50%);bottom:max(16px,env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:8px;z-index:9;width:min(92vw,440px)}
@@ -379,6 +391,13 @@ function render(s){
  $("open").replaceChildren(...(o.length?o.map(p=>{const d=el("div","item");const n=link("$"+p.symbol,p.link);const w=el("div");w.append(n,el("span","tag",NAMES[p.strategy]||p.strategy));if(p.took_half)w.append(el("span","tag","sold half"));
   d.append(w,el("b",cls(p.pnl),sgn(p.pnl)+" ("+pct(p.pnl_pct)+")"));
   if(p.mc_in)d.append(el("div","sub","Bought at "+mcf(p.mc_in)+" · now "+(mcf(p.mc_now)||"?")));
+  {const g=el("div","stats"),S=p.stats||{};const cell=(k,v,c)=>{const b=el("div","stat");b.append(el("div","k",k),el("div","v "+(c||""),v));g.append(b)};
+   const km=v=>v==null?"n/a":(v>=1e6?"$"+(v/1e6).toFixed(2)+"M":v>=1e3?"$"+(v/1e3).toFixed(1)+"K":"$"+Math.round(v));
+   cell("Market cap",(mcf(p.mc_now)||"n/a").replace(" MC",""));cell("Pool",km(p.liq));
+   cell("Volume 1h",km(S.vol_h1));cell("Volume 5m",km(S.vol_m5));
+   cell("Buys / sells 5m",(S.buys_m5??"?")+" / "+(S.sells_m5??"?"),(S.buys_m5||0)>=(S.sells_m5||0)?"up":"down");
+   cell("Buys / sells 1h",(S.buys_h1??"?")+" / "+(S.sells_h1??"?"),(S.buys_h1||0)>=(S.sells_h1||0)?"up":"down");
+   cell("Change 5m",S.pc_m5==null?"n/a":pct(S.pc_m5),cls(S.pc_m5||0));cell("Change 1h",S.pc_h1==null?"n/a":pct(S.pc_h1),cls(S.pc_h1||0));d.append(g)}
   d.append(el("div","sub","Price "+pct(p.move_pct)+" since entry · held "+dur(s.now-p.opened_at)+" · pool "+money(p.liq).replace(".00","")+" · $"+p.size+" in, worth "+money(p.value_if_sold)+" if sold"));
   if(p.why)d.append(el("div","sub","Why: "+p.why));if(p.chart)d.append(priceChart(p.chart));return d}):[el("div","empty","No open trades. He's waiting for a setup.")]));
  $("activity").replaceChildren(...(s.activity.length?s.activity.map(a=>{const d=el("div","item");const w=el("div");const icon=a.side==="buy"?"🟢 Bought ":"🔴 Sold ";w.append(document.createTextNode(icon),link("$"+a.symbol,a.link),el("span","tag",NAMES[a.strategy]||a.strategy));
