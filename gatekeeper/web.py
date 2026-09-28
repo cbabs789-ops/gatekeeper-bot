@@ -84,7 +84,7 @@ def chart_data(con, mint, t0, t1, entry, legs):
     if rows and rows[-1]["price"] and (not pts or pts[-1][0] != rows[-1]["ts"]):
         pts.append([rows[-1]["ts"], round((rows[-1]["price"] / entry - 1) * 100, 2)])
     mk = [[g.get("ts"), g.get("side"), round((g["spot"] / entry - 1) * 100, 2)] for g in legs if g.get("spot") and g.get("ts")]
-    return {"points": pts, "legs": mk}
+    return {"points": pts, "legs": mk, "mc_entry": _mc(entry, _supply(con, mint))}
 
 
 def _levels(p, pos, entry):
@@ -136,6 +136,8 @@ def state(runner):
                 "took_half": pos.took_half, "liq": round(liq), "why": pos.why,
                 "mc_in": _mc(pos.spot_at_entry, _supply(con, mint)), "mc_now": _mc(price, _supply(con, mint)),
                 "stats": _coin_stats(con, mint),
+                "log": [{"ts": g.get("ts"), "side": g.get("side"), "usd": round(g.get("usd") or 0, 2),
+                         "mc": _mc(g.get("spot"), _supply(con, mint)), "why": g.get("why") or ""} for g in pos.legs],
                 "stop_at": round(pos.spot_at_entry * (1 - st.p["STOP_LOSS_PCT"] / 100), 12),
                 "chart": dict(chart_data(con, mint, pos.opened_at, now, pos.spot_at_entry, pos.legs),
                               levels=_levels(st.p, pos, pos.spot_at_entry)) if pos.spot_at_entry else None})
@@ -158,7 +160,9 @@ def state(runner):
             lg = []
         sup = _supply(con, r["mint"])
         sells = [g for g in lg if g.get("side") == "sell"]
-        out["closed"].append({"mc_in": _mc(lg[0].get("spot") if lg else None, sup), "mc_out": _mc(sells[-1].get("spot") if sells else None, sup),
+        log = [{"ts": g.get("ts"), "side": g.get("side"), "usd": round(g.get("usd") or 0, 2), "mc": _mc(g.get("spot"), sup),
+                "why": g.get("why") or ""} for g in lg]
+        out["closed"].append({"log": log, "mc_in": _mc(lg[0].get("spot") if lg else None, sup), "mc_out": _mc(sells[-1].get("spot") if sells else None, sup),
                               "id": r["id"], "strategy": r["run_id"] or "main", "symbol": r["symbol"], "link": _link(r["mint"]),
                               "opened_at": r["opened_at"], "closed_at": r["closed_at"], "pnl": round(r["pnl_usd"] or 0, 2),
                               "pnl_pct": round(r["pnl_pct"] or 0, 1), "exit": r["exit_reason"], "why": r["why_entered"]})
@@ -309,12 +313,14 @@ svg{width:100%;height:70px;display:block;margin-top:8px}
 .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:760px){.cols{grid-template-columns:1fr}}
 .empty{color:var(--dim);font-size:13px;padding:8px 2px}
 footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
-.chart{grid-column:1/-1;margin-top:6px}.chart svg{height:150px;margin:0}
+.chart{grid-column:1/-1;margin-top:6px}.chart svg{height:170px;margin:0}
 .item.tap{cursor:pointer}.hint{font-size:11px;color:var(--dim)}
 .stats{grid-column:1/-1;display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:6px 0 2px}
 .stat{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
 .stat .k{font-size:10.5px}.stat .v{font-size:14px;margin:0}
 @media(max-width:420px){.stats{grid-template-columns:repeat(2,1fr)}}
+.tlog{grid-column:1/-1;margin-top:6px;border-top:1px solid var(--line);padding-top:6px;display:flex;flex-direction:column;gap:3px}
+.trow{display:grid;grid-template-columns:1.2fr 1fr 1.3fr .9fr;gap:6px;font-size:12.5px}.trow .wide{grid-column:1/-1;font-size:11.5px;margin-top:-2px}
 .legend{grid-column:1/-1;font-size:11px;color:var(--dim);display:flex;gap:10px;flex-wrap:wrap}
 .legend i{display:inline-block;width:12px;height:0;border-top:2px dashed;vertical-align:middle;margin-right:4px}
 #toasts{position:fixed;left:50%;transform:translateX(-50%);bottom:max(16px,env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:8px;z-index:9;width:min(92vw,440px)}
@@ -344,7 +350,8 @@ const sgn=v=>(v>0?"+":"")+money(v);
 const cls=v=>v>0?"up":v<0?"down":"dim";
 const pct=v=>v==null?"n/a":(v>0?"+":"")+v.toFixed(1)+"%";
 const t=ms=>{const d=new Date(ms);return d.toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})};
-const mcf=v=>{if(!v)return null;const u=[[1e9,"B"],[1e6,"M"],[1e3,"K"]];for(const[d,x]of u)if(v>=d)return "$"+(+(v/d).toFixed(2))+x+" MC";return "$"+v+" MC"};
+const mcf=v=>{if(!v)return null;if(v>=1e9)return "$"+(+(v/1e9).toFixed(2))+"B MC";if(v>=1e6)return "$"+(+(v/1e6).toFixed(2))+"M MC";
+ if(v>=1e3)return "$"+(+(v/1e3).toFixed(v>=1e5?0:1))+"K MC";return "$"+Math.round(v)+" MC"};
 const dur=ms=>{const m=Math.round(ms/60000);return m<60?m+"m":Math.floor(m/60)+"h "+(m%60)+"m"};
 const NAMES={main:"Main",wide:"Wide",follow:"Follow",momentum:"Momentum"};
 function link(txt,href){if(!href)return el("span",null,txt);const a=el("a",null,txt);a.href=href;a.target="_blank";a.rel="noopener";return a}
@@ -357,7 +364,7 @@ function spark(pts){const ns="http://www.w3.org/2000/svg",s=document.createEleme
 function stat(k,v,c){const d=el("div","card");d.append(el("div","k",k),el("div","v "+(c||""),v));return d}
 const LV={stop:["#f85149","stop"],target:["#3fb950","sell half"],trail:["#d29922","trailing stop"],lock:["#d29922","profit lock"],floor:["#58a6ff","breakeven floor"]};
 function priceChart(d){const box=el("div","chart");const ns="http://www.w3.org/2000/svg";const s=document.createElementNS(ns,"svg");
- const W=340,H=150,L=38,R=6,T=8,B=18;s.setAttribute("viewBox","0 0 "+W+" "+H);box.append(s);
+ const W=340,H=170,L=38,R=6,T=14,B=18;s.setAttribute("viewBox","0 0 "+W+" "+H);box.append(s);
  const pts=(d&&d.points)||[];if(pts.length<2){box.append(el("div","hint","Chart fills in as prices come in."));return box}
  const lv=d.levels||{};const ys=pts.map(p=>p[1]).concat([0],Object.values(lv).filter(v=>v!=null),(d.legs||[]).map(l=>l[2]));
  let lo=Math.min(...ys),hi=Math.max(...ys);const padY=(hi-lo)*0.08||5;lo-=padY;hi+=padY;
@@ -366,6 +373,9 @@ function priceChart(d){const box=el("div","chart");const ns="http://www.w3.org/2
  const txt=(x,y,str,anchor)=>{const e=add("text",{x,y,fill:"#8b949e","font-size":"9","text-anchor":anchor||"start"});e.textContent=str};
  const hl=(v,c)=>add("line",{x1:L,x2:W-R,y1:Y(v),y2:Y(v),stroke:c,"stroke-dasharray":"4 3","stroke-width":"1","vector-effect":"non-scaling-stroke"});
  hl(0,"#8b949e");for(const k in lv)if(lv[k]!=null&&LV[k])hl(lv[k],LV[k][0]);
+ const me=d.mc_entry;const tag=(v,c,name)=>{const e=add("text",{x:W-R-2,y:Y(v)-3,fill:c,"font-size":"9","text-anchor":"end","font-weight":"600",stroke:"#161b22","stroke-width":"3","paint-order":"stroke"});
+  e.textContent=name+(me?" "+mcf(Math.round(me*(1+v/100))).replace(" MC",""):" "+(v>0?"+":"")+v+"%")};
+ tag(0,"#c9d1d9","Bought");for(const k in lv)if(lv[k]!=null&&LV[k])tag(lv[k],LV[k][0],LV[k][1][0].toUpperCase()+LV[k][1].slice(1));
  [hi-padY,0,lo+padY].forEach(v=>txt(L-4,Y(v)+3,(v>0?"+":"")+v.toFixed(0)+"%","end"));
  const last=pts[pts.length-1][1];add("polyline",{points:pts.map(p=>X(p[0])+","+Y(p[1])).join(" "),fill:"none",stroke:"#e6edf3","stroke-width":"2","vector-effect":"non-scaling-stroke"});
  (d.legs||[]).forEach(l=>{if(l[0]<t0||l[0]>t1)return;add("circle",{cx:X(l[0]),cy:Y(l[2]),r:4.5,fill:l[1]==="buy"?"#3fb950":"#f0883e",stroke:"#0d1117","stroke-width":"1.5"})});
@@ -373,6 +383,10 @@ function priceChart(d){const box=el("div","chart");const ns="http://www.w3.org/2
  const lg=el("div","legend");const it=(c,n)=>{const sp=el("span");const i=el("i");i.style.borderColor=c;sp.append(i,document.createTextNode(n));lg.append(sp)};
  const pl=el("span","","━ price");pl.style.color="#e6edf3";lg.append(pl);it("#8b949e","entry");for(const k in lv)if(lv[k]!=null&&LV[k])it(LV[k][0],LV[k][1]+" "+(lv[k]>0?"+":"")+lv[k]+"%");
  const dot=(c,n)=>{const sp=el("span",null,"● "+n);sp.style.color=c;lg.append(sp)};dot("#3fb950","buy");dot("#f0883e","sell");box.append(lg);return box}
+function tradeLog(log){const box=el("div","tlog");(log||[]).forEach(g=>{const r=el("div","trow");
+  const buy=g.side==="buy";r.append(el("span",buy?"up":"down",buy?"🟢 Bought":((g.why||"").includes("half")||(g.why||"").includes("moonbag")?"🟡 Sold part":"🔴 Sold")),
+   el("span",null,money(g.usd)),el("span",null,g.mc?"at "+mcf(g.mc):""),el("span","dim",new Date(g.ts).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})));
+  if(g.why&&!buy)r.append(el("span","dim wide",g.why));box.append(r)});return box}
 const OPEN_CHARTS={};
 async function toggleChart(item,id){if(OPEN_CHARTS[id]){delete OPEN_CHARTS[id];const c=item.querySelector(".chart");if(c)c.remove();const g=item.querySelector(".legend");if(g)g.remove();return}
  OPEN_CHARTS[id]="loading";try{const r=await fetch("api/chart?id="+id+"&k="+encodeURIComponent(K));OPEN_CHARTS[id]=await r.json();item.append(priceChart(OPEN_CHARTS[id]))}catch(_){delete OPEN_CHARTS[id]}}
@@ -399,7 +413,7 @@ function render(s){
    cell("Buys / sells 1h",(S.buys_h1??"?")+" / "+(S.sells_h1??"?"),(S.buys_h1||0)>=(S.sells_h1||0)?"up":"down");
    cell("Change 5m",S.pc_m5==null?"n/a":pct(S.pc_m5),cls(S.pc_m5||0));cell("Change 1h",S.pc_h1==null?"n/a":pct(S.pc_h1),cls(S.pc_h1||0));d.append(g)}
   d.append(el("div","sub","Price "+pct(p.move_pct)+" since entry · held "+dur(s.now-p.opened_at)+" · pool "+money(p.liq).replace(".00","")+" · $"+p.size+" in, worth "+money(p.value_if_sold)+" if sold"));
-  if(p.why)d.append(el("div","sub","Why: "+p.why));if(p.chart)d.append(priceChart(p.chart));return d}):[el("div","empty","No open trades. He's waiting for a setup.")]));
+  if(p.why)d.append(el("div","sub","Why: "+p.why));if(p.chart)d.append(priceChart(p.chart));d.append(tradeLog(p.log));return d}):[el("div","empty","No open trades. He's waiting for a setup.")]));
  $("activity").replaceChildren(...(s.activity.length?s.activity.map(a=>{const d=el("div","item");const w=el("div");const icon=a.side==="buy"?"🟢 Bought ":"🔴 Sold ";w.append(document.createTextNode(icon),link("$"+a.symbol,a.link),el("span","tag",NAMES[a.strategy]||a.strategy));
   d.append(w,el("span","dim",money(a.usd)));d.append(el("div","sub",t(a.ts)+(a.mc?" · at "+mcf(a.mc):"")+(a.why?" · "+a.why:"")));return d}):[el("div","empty","No trades in the last 3 days.")]));
  $("alerts").replaceChildren(...(s.alerts.length?s.alerts.map(a=>{const d=el("div","item");const w=el("div");w.append(document.createTextNode(a.kind==="cluster"?"🔵 Cluster ":"🔥 Trending "),link("$"+a.token,a.link));
@@ -407,6 +421,7 @@ function render(s){
  $("closed").replaceChildren(...(s.closed.length?s.closed.map(c=>{const d=el("div","item");const w=el("div");w.append(link("$"+c.symbol,c.link),el("span","tag",NAMES[c.strategy]||c.strategy));
   d.append(w,el("b",cls(c.pnl),sgn(c.pnl)+" ("+pct(c.pnl_pct)+")"));if(c.mc_in)d.append(el("div","sub","Bought at "+mcf(c.mc_in)+(c.mc_out?" → sold at "+mcf(c.mc_out):"")));
   d.append(el("div","sub",t(c.closed_at)+" · held "+dur(c.closed_at-c.opened_at)+" · "+(c.exit||"")+" · tap for chart"));
+  d.append(tradeLog(c.log));
   d.classList.add("tap");d.onclick=e=>{if(e.target.closest("a"))return;toggleChart(d,c.id)};
   const cached=OPEN_CHARTS[c.id];if(cached&&cached!=="loading")d.append(priceChart(cached));return d}):[el("div","empty","No closed trades yet.")]));
 }
