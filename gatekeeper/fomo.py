@@ -83,7 +83,7 @@ def ensure_schema(con):
 # ------------------------------------------------------------------ themes
 THEMES = [
     ("AI and tech", r"\b(ai|gpt|agent|bot|neural|claude|openai|grok|llm|robot|cyber|quantum|compute|gpu|data)\b|openai|agi"),
-    ("Tokenized stocks", r"^(tsla|nvda|aapl|msft|amzn|goog|googl|meta|spy|qqq|coin|hood|mstr|pltr|gme|amc)x?\b|\bstock\b|equity|nasdaq|s&p"),
+    ("Tokenized stocks", r"^(tsla|nvda|aapl|msft|amzn|goog|googl|meta|spy|qqq|coin|hood|mstr|pltr|gme|amc|amd|mu|sndk|spcx|intc|nflx|orcl|avgo|crcl|abnb|uber|shop|baba|pypl|rblx|cvna|smci|arm|tsm|jpm|bac|dis|nke|wmt|cost|crwd|panw|net|snow|mrvl|qcom|asml|lly|unh|xom|iwm|dia|voo|tqqq|sqqq)x?$|\bstock\b|equity|nasdaq|s&p"),
     ("Gold and commodities", r"gold|xau|paxg|silver|oil|commodit|bullion"),
     ("Politics", r"trump|maga|biden|elon|musk|vote|president|melania|barron|kamala|vance|doge\b(?=.*gov)|america|usa"),
     ("Dogs", r"dog|inu|shib|doge|pup|wif|bonk|corgi|shiba|pug"),
@@ -123,18 +123,22 @@ class Client:
         cap = int(float(config.os.environ.get("GK_FOMO_MONTHLY_CREDITS", "230000")))
         if self.credits_used() + credits > cap:
             raise RuntimeError("Monthly FOMO API credit cap reached (%d). Raise GK_FOMO_MONTHLY_CREDITS or wait for next month." % cap)
-        for attempt in range(4):
+        for attempt in range(6):
             async with self.s.get(API + path, params=params or {}, headers={"authorization": "Bearer " + key()},
                                   timeout=aiohttp.ClientTimeout(total=30)) as r:
                 if r.status in (429, 502, 503, 504):
-                    await asyncio.sleep(4 * (attempt + 1))
+                    try:
+                        wait = float(r.headers.get("Retry-After") or 0)
+                    except ValueError:
+                        wait = 0
+                    await asyncio.sleep(max(wait, min(5 * 2 ** attempt, 60)))
                     continue
                 body = await r.text()
                 if r.status != 200:
                     raise RuntimeError("FOMO API %s on %s: %s" % (r.status, path, body[:200]))
                 self._spend(credits)
                 return json.loads(body)
-        raise RuntimeError("FOMO API busy, gave up after 4 tries")
+        raise RuntimeError("FOMO API busy, gave up after 6 tries")
 
 
 def _list_in(obj, *keys):
@@ -237,14 +241,25 @@ async def trend_scan(session, con, seeds=None, expand_following=True, max_trader
             notes.append("Couldn't read @%s's follows: %s" % (seeds[0], e))
     traders = traders[:max_traders]
     per_trader, failures = {}, []
-    for h in traders:
-        try:
-            per_trader[h] = parse_positions(await c.get("/v2/users/%s/positions" % h))
-        except Exception as e:  # noqa: BLE001
-            failures.append("%s (%s)" % (h, str(e)[:60]))
-            if "credit cap" in str(e):
+    busy = []
+    for rnd in range(2):                       # second round retries anyone the API was too busy for
+        todo = traders if rnd == 0 else busy
+        if rnd == 1:
+            if not busy:
                 break
-        await asyncio.sleep(0.4)
+            await asyncio.sleep(90)
+            busy = []
+        for h in todo:
+            try:
+                per_trader[h] = parse_positions(await c.get("/v2/users/%s/positions" % h))
+            except Exception as e:  # noqa: BLE001
+                if "busy" in str(e) and rnd == 0:
+                    busy.append(h)
+                else:
+                    failures.append("%s (%s)" % (h, str(e)[:60]))
+                if "credit cap" in str(e):
+                    break
+            await asyncio.sleep(1.5)
     return summarize_scan(per_trader, failures, notes, c.credits_used())
 
 
@@ -297,15 +312,18 @@ def scan_text(res):
             L.append("%s: %d · %d · %s (%d traders)" % (name.title(), c["positions"], c["open"], money(c["pnl"]), len(c["traders"])))
     th = sorted(res["themes"].items(), key=lambda kv: (len(kv[1]["traders"]), kv[1]["positions"]), reverse=True)
     if th:
-        top = th[0]
+        named = [t for t in th if t[0] not in ("Other", "Tokenized stocks")]
+        top = named[0] if named else th[0]
         L.append("\n<b>Top theme: %s</b> (%d of %d traders in it)" % (top[0], len(top[1]["traders"]), res["scanned"]))
         L.append("\n<b>By theme</b> (traders · positions · win rate · profit taken · open profit)")
         for name, t in th[:10]:
             wr = "%d%%" % round(t["wins"] / t["closed"] * 100) if t["closed"] else "n/a"
             L.append("%s: %d · %d · %s · %s · %s" % (name, len(t["traders"]), t["positions"], wr, money(t["pnl"]), money(t["open_pnl"])))
-    base = {"WETH", "ETH", "SOL", "WSOL", "USDC", "USDT", "BNB", "WBNB", "MON", "WBTC", "BTC"}
+    base = {"WETH", "ETH", "SOL", "WSOL", "USDC", "USDT", "BNB", "WBNB", "MON", "WBTC", "BTC", "BTCB", "CBBTC",
+            "USDE", "DAI", "PYUSD", "USD1", "USDS", "FDUSD", "STETH", "JITOSOL", "MSOL"}
+    # leave out base coins, stock tokens and dust (airdrops and leftovers worth under $50 either way)
     shared = [(k, v) for k, v in res["tokens"].items() if len(v["traders"]) >= 2
-              and v["symbol"].upper() not in base and v["theme"] != "Tokenized stocks"]
+              and v["symbol"].upper() not in base and v["theme"] != "Tokenized stocks" and abs(v["pnl"]) >= 50]
     shared.sort(key=lambda kv: (len(kv[1]["traders"]), kv[1]["pnl"]), reverse=True)
     if shared:
         L.append("\n<b>Coins several of them hold or traded</b> (base coins and stock tokens left out)")
