@@ -222,6 +222,48 @@ def score(model, row):
     return min(95, p), "early estimate (not enough history yet)"
 
 
+TARGETS = (1.2, 1.4, 2, 3, 5, 8)
+RISK_BANDS = ((0, 20, "under 20%"), (20, 35, "20-35%"), (35, 50, "35-50%"), (50, 60, "50-60%"), (60, 101, "60%+"))
+
+
+def targets(con, model, stop=0.15, cost=0.06, days=21):
+    """For each risk band: how often coins reached each profit target within 12h, how often they drained,
+    and which target would have made the most (rough: assumes the peak came before any drain)."""
+    now = int(time.time() * 1000)
+    rows = [dict(r) for r in con.execute("SELECT * FROM coin_features WHERE ts<? AND ts>?",
+                                         (now - LABEL_AFTER_MS, now - days * 86400000))]
+    out = []
+    for lo, hi, label in RISK_BANDS:
+        band = [r for r in rows if lo <= score(model, r)[0] < hi]
+        if len(band) < 30:
+            out.append((label, len(band), None, None, None))
+            continue
+        hit = {t: sum(1 for r in band if (r["peak_x"] or 1) >= t) / len(band) for t in TARGETS}
+        drained = sum(1 for r in band if rugged(r)) / len(band)
+        best = None
+        for t in TARGETS:
+            # win: sell at the target. miss: rugged coins lose everything, the rest hit the stop
+            miss = 1 - hit[t]
+            ev = hit[t] * (t - 1) - max(0.0, miss - drained) * stop - min(drained, miss) * 1.0 - cost
+            if best is None or ev > best[1]:
+                best = (t, ev)
+        out.append((label, len(band), hit, drained, best))
+    return out
+
+
+def targets_text(con, model):
+    rows = targets(con, model)
+    L = ["\n<b>How high coins went within 12h, by rug risk</b> (share that reached each target · drained)"]
+    for label, n, hit, drained, best in rows:
+        if hit is None:
+            L.append("Risk %s: only %d coins, not enough yet" % (label, n))
+            continue
+        L.append("Risk %s (%s coins): %s · drained %.0f%% → best target by the data: <b>%gx</b> (%+.0f%% per $1 bet)" % (
+            label, format(n, ","), " · ".join("%gx %.0f%%" % (t, hit[t] * 100) for t in TARGETS), drained * 100, best[0], best[1] * 100))
+    L.append("Rough math: sells at the target if reached, otherwise a drained coin loses it all and the rest hit the stop; 6% trading costs included.")
+    return "\n".join(L)
+
+
 def report(con):
     m = load(con)
     if not m:
@@ -244,4 +286,8 @@ def report(con):
     for rate, k, v, tot in sorted(items, reverse=True)[:8]:
         L.append("%s: %.0f%% drained (%s coins)" % (v[0].upper() + v[1:], rate, format(tot, ",")))
     L.append("\nOverall: %.0f%%. Scores above 50%% mean the bot takes a quick profit instead of holding." % base)
+    try:
+        L.append(targets_text(con, m))
+    except Exception:  # noqa: BLE001
+        pass
     return "\n".join(L)
