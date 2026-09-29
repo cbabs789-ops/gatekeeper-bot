@@ -528,6 +528,24 @@ class Runner:
         finally:
             self.sweeping = False
 
+    async def risk_backfill(self):
+        """Once: rebuild rug-risk history from coins already recorded, so scores are learned from day one."""
+        if db.kv_get(self.con, "rug_backfill_done"):
+            return
+        await asyncio.sleep(60)
+        try:
+            def work():
+                c = db.connect()
+                n, coins = risk.backfill(c)
+                return n, coins, risk.build(c)
+            n, coins, model = await asyncio.to_thread(work)
+            self.rug_model = model
+            db.kv_set(self.con, "rug_backfill_done", 1)
+            await notify.send(self.session, "🧯 Rug-risk model trained on %s checkpoints from %s past coins (%s drained). Send /risk to see what it learned." % (
+                format(n, ","), format(coins, ","), format(model.get("rugs", 0), ",")))
+        except Exception:  # noqa: BLE001
+            log.exception("Rug backfill failed")
+
     async def scorecard_loop(self):
         while True:
             try:
@@ -667,7 +685,7 @@ class Runner:
             await asyncio.gather(
                 fomo.Feed(self.con, self.on_fomo_alert, self.track_coin, self.on_trader_sell).run(),
                 pumpportal_stream(self.on_event, config.PUMPPORTAL_API_KEY),
-                self.poll_loop(), self.fast_loop(), self.safety_loop(), self.telegram_loop(), self.daily_loop(), self.scorecard_loop())
+                self.poll_loop(), self.fast_loop(), self.safety_loop(), self.risk_backfill(), self.telegram_loop(), self.daily_loop(), self.scorecard_loop())
 
 
 def main():

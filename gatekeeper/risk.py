@@ -123,6 +123,49 @@ def rugged(row):
     return bool(row["dead"]) or (row["min_liq_frac"] or 1) < DRAIN_FRAC
 
 
+# ------------------------------------------------------------------ backfill
+def backfill(con, days=14, progress=None):
+    """Rebuild vital signs and outcomes for coins already recorded, so the model can learn right away.
+    Safety fields use the stored check (usually taken early in the coin's life)."""
+    ensure(con)
+    now = int(time.time() * 1000)
+    since = now - days * 86400000
+    coins = con.execute("SELECT c.mint, c.graduated_at, c.status, c.socials FROM coins c "
+                        "WHERE c.graduated_at>=? AND c.source IS NULL AND NOT EXISTS "
+                        "(SELECT 1 FROM coin_features f WHERE f.mint=c.mint)", (since,)).fetchall()
+    safety = {r["mint"]: dict(r) for r in con.execute("SELECT * FROM safety")}
+    done = 0
+    for i, c in enumerate(coins):
+        g = c["graduated_at"]
+        rows = con.execute("SELECT ts, price, liq, fdv, buys_m5, sells_m5, buys_h1, sells_h1, vol_h1, pc_h1 FROM snapshots "
+                           "WHERE mint=? AND ts>=? AND ts<=? ORDER BY ts", (c["mint"], g, g + (240 + 720) * 60000)).fetchall()
+        if not rows:
+            continue
+        for cp in CHECKPOINTS:
+            t = g + cp * 60000
+            at = next((r for r in rows if r["ts"] >= t), None)
+            if not at or at["ts"] > t + 20 * 60000 or not at["price"] or (at["liq"] or 0) < 1000:
+                continue
+            after = [r for r in rows if at["ts"] <= r["ts"] <= at["ts"] + LABEL_AFTER_MS]
+            if after[-1]["ts"] < at["ts"] + LABEL_AFTER_MS - 60 * 60000 and c["status"] != "dead":
+                continue                                    # not enough follow-up to know how it ended
+            peak = max(r["price"] or 0 for r in after) / at["price"]
+            minliq = min((r["liq"] or 0) for r in after) / at["liq"]
+            snap = {"price": at["price"], "liq": at["liq"], "fdv": at["fdv"], "buys_m5": at["buys_m5"], "sells_m5": at["sells_m5"],
+                    "buys_h1": at["buys_h1"], "sells_h1": at["sells_h1"], "vol_h1": at["vol_h1"], "pc_h1": at["pc_h1"]}
+            r = live_row(snap, safety.get(c["mint"]), c["socials"], cp)
+            r.update(mint=c["mint"], ts=at["ts"], t_min=cp, peak_x=peak, min_liq_frac=minliq,
+                     dead=1 if c["status"] == "dead" and after[-1]["ts"] < at["ts"] + LABEL_AFTER_MS else 0)
+            con.execute("INSERT OR IGNORE INTO coin_features(mint, t_min, ts, price, liq, fdv, buys5, sells5, buys1h, sells1h, "
+                        "vol1h, pc1h, top10, insiders, lp_ok, auth_ok, danger, socials, dev_prev, dev_dead, peak_x, min_liq_frac, dead) "
+                        "VALUES (:mint,:t_min,:ts,:price,:liq,:fdv,:buys5,:sells5,:buys1h,:sells1h,:vol1h,:pc1h,:top10,:insiders,"
+                        ":lp_ok,:auth_ok,:danger,:socials,:dev_prev,:dev_dead,:peak_x,:min_liq_frac,:dead)", r)
+            done += 1
+        if progress and i and i % 1000 == 0:
+            progress(i, len(coins))
+    return done, len(coins)
+
+
 # ------------------------------------------------------------------ model
 def build(con, days=21):
     """Count drain rates per vital sign from finished rows. Returns the model dict (also saved in kv)."""
