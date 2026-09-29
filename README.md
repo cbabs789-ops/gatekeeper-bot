@@ -46,6 +46,8 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 
 27. **Data-picked profit targets.** Every hour the bot works out, for each rug-risk band, which profit target (1.2x to 8x) would have made the most across the coins it tracked, counting rugs and stop-outs. Each new trade gets the target for its band ("data target 1.4x"). Turn off with `ADAPTIVE_TARGETS=0`. The bot also now records each coin's lowest point after each checkpoint, so stop levels can be picked from data next.
 
+28. **Trends.** Every 5 minutes the bot pulls Trump's Truth Social posts (trumpstruth.org's public feed), Google News top stories and crypto/meme-coin searches, DexScreener's new coin profiles and boosts, and what Fomo traders piled into over the last 3 hours. It finds the words trending in the news, matches them to coin names, safety-checks the candidates, scores their rug risk, and picks a few worth a look. Dashboard Trends tab (pictures, links, headlines, posts), `/trends` in Telegram, a 📣 alert when Trump posts (with any matching coins), and a 📰 alert for strong picks. The bot's picks are graded 1h, 6h and 24h later like a trader in the scorecard.
+
 ## Install (fresh Ubuntu server, as root)
 
 ```

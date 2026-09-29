@@ -265,7 +265,19 @@ def make_app(runner):
         d = chart_data(runner.con, r["mint"], r["opened_at"], (r["closed_at"] or r["opened_at"]) + 20 * 60000, entry, legs)
         return web.json_response(dict(d, levels={"stop": stop}), headers={"Cache-Control": "no-store"})
 
+    async def trends_api(req):
+        if not authed(req):
+            return web.json_response({"error": "forbidden"}, status=403)
+        tr = getattr(runner, "trends", None)
+        st = dict(tr.state) if tr else {}
+        if st.get("updated"):
+            # how the bot's own picks have done so far (graded like a trader in the scorecard)
+            rows = runner.con.execute("SELECT symbol, p0, p1h, p6h, p24h FROM trader_calls WHERE trader='gatekeeper-picks' AND p0>0 ORDER BY ts DESC LIMIT 30").fetchall()
+            st["picks_record"] = [dict(r) for r in rows]
+        return web.json_response(st, headers={"Cache-Control": "no-store"})
+
     app = web.Application()
+    app.router.add_get("/api/trends", trends_api)
     app.router.add_get("/api/chart", chart)
     app.router.add_get("/", page)
     app.router.add_get("/api/stream", stream)
@@ -323,12 +335,39 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 .trow{display:grid;grid-template-columns:1.2fr 1fr 1.3fr .9fr;gap:6px;font-size:12.5px}.trow .wide{grid-column:1/-1;font-size:11.5px;margin-top:-2px}
 .legend{grid-column:1/-1;font-size:11px;color:var(--dim);display:flex;gap:10px;flex-wrap:wrap}
 .legend i{display:inline-block;width:12px;height:0;border-top:2px dashed;vertical-align:middle;margin-right:4px}
+.tabs{display:flex;gap:8px;margin:14px 0 4px}.tabs button{flex:1;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit;font-weight:600;cursor:pointer}
+.tabs button.on{border-color:var(--acc);color:var(--acc)}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+.coin{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+.coin .hdr{height:70px;background:#0b0f14 center/cover no-repeat}
+.coin .body{padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.coin .top{display:flex;gap:10px;align-items:center}.coin img.ic{width:42px;height:42px;border-radius:50%;object-fit:cover;background:#0b0f14;flex:none}
+.coin .nm{font-weight:700}.coin .nm a{color:var(--acc);text-decoration:none}.coin .desc{font-size:12.5px;color:var(--dim);max-height:3.2em;overflow:hidden}
+.chips{display:flex;flex-wrap:wrap;gap:5px}.chip{font-size:11.5px;border:1px solid var(--line);border-radius:10px;padding:2px 8px;color:var(--dim)}
+.chip.good{color:var(--up);border-color:rgba(63,185,80,.4)}.chip.bad{color:var(--down);border-color:rgba(248,81,73,.4)}.chip.warn{color:var(--warn)}
+.why{font-size:12.5px}.why a,.item a{color:var(--acc);text-decoration:none}.links a{font-size:12px;color:var(--acc);margin-right:10px;text-decoration:none}
+.words{display:flex;flex-wrap:wrap;gap:6px}.words span{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:4px 10px;font-size:13px}
+.post{background:var(--card);border:1px solid var(--line);border-left:3px solid #d29922;border-radius:8px;padding:10px 12px;font-size:14px}
+.post a{color:var(--acc);text-decoration:none}
 #toasts{position:fixed;left:50%;transform:translateX(-50%);bottom:max(16px,env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:8px;z-index:9;width:min(92vw,440px)}
 .toast{background:#1f2630;border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:10px;padding:10px 14px;font-weight:600;box-shadow:0 6px 24px rgba(0,0,0,.5);animation:pop .25s ease-out}
 .toast.buy{border-left-color:var(--up)}.toast.close{border-left-color:var(--warn)}
 @keyframes pop{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 </style></head><body><div class="wrap">
 <header><h1>🤖 Gatekeeper Live</h1><span class="pill" id="health">connecting…</span></header>
+<nav class="tabs"><button id="tb-trading" class="on" onclick="tab('trading')">📈 Trading</button><button id="tb-trends" onclick="tab('trends')">📰 Trends</button></nav>
+<div id="tab-trends" hidden>
+<p class="dim" id="tr-upd">Loading trends…</p>
+<h2>Worth a look <span class="dim" style="text-transform:none;letter-spacing:0">(the bot's picks, not buy signals)</span></h2><div class="cards" id="tr-sugg"></div>
+<h2>Trump's latest posts</h2><div class="list" id="tr-trump"></div>
+<h2>Coins riding the news</h2><div class="cards" id="tr-match"></div>
+<h2>Hot on Fomo (last 3h)</h2><div class="cards" id="tr-hot"></div>
+<h2>Hot words in the news</h2><div class="words" id="tr-words"></div>
+<h2>Headlines</h2><div class="list" id="tr-news"></div>
+<h2>New coin profiles on DexScreener</h2><div class="cards" id="tr-prof"></div>
+<h2>How the bot's picks did</h2><div class="list" id="tr-record"></div>
+</div>
+<div id="tab-trading">
 <div class="big" id="big"></div>
 <h2>Strategies</h2><div class="strats" id="strats"></div>
 <h2>Open paper trades <span class="dim" style="text-transform:none;letter-spacing:0">(value if sold right now, after fees and slippage)</span></h2>
@@ -338,6 +377,7 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 <div><h2>Fomo alerts</h2><div class="list" id="alerts"></div></div>
 </div>
 <h2>Closed trades</h2><div class="list" id="closed"></div>
+</div>
 <footer>Tap any coin name to open it in Fomo. Paper trading with fake money. Buys and sells appear the instant they happen; prices refresh every 5 seconds. Not financial advice.</footer>
 <div id="toasts"></div>
 </div>
@@ -429,6 +469,35 @@ function render(s){
 async function load(){try{const r=await fetch("api/state?k="+encodeURIComponent(K),{cache:"no-store"});if(!r.ok)throw new Error(r.status);render(await r.json())}
  catch(e){$("health").replaceChildren(el("span","dot bad"),document.createTextNode("Can't reach the bot ("+e.message+"). Retrying…"))}}
 load();setInterval(load,5000);
+let TAB="trading";
+function tab(t){TAB=t;$("tab-trading").hidden=t!=="trading";$("tab-trends").hidden=t!=="trends";$("tb-trading").classList.toggle("on",t==="trading");$("tb-trends").classList.toggle("on",t==="trends");
+ try{localStorage.setItem("gk_tab",t)}catch(_){ }if(t==="trends")loadTrends()}
+const ago=ms=>{const m=Math.round((Date.now()-ms)/60000);return m<60?m+"m ago":m<1440?Math.round(m/60)+"h ago":Math.round(m/1440)+"d ago"};
+const km2=v=>v==null?"n/a":v>=1e9?"$"+(v/1e9).toFixed(2)+"B":v>=1e6?"$"+(v/1e6).toFixed(2)+"M":v>=1e3?"$"+(v/1e3).toFixed(0)+"K":"$"+Math.round(v);
+function coinCard(c,extra){const d=el("div","coin");if(c.header){const h=el("div","hdr");h.style.backgroundImage="url('"+encodeURI(c.header)+"')";d.append(h)}
+ const b=el("div","body");const top=el("div","top");if(c.image){const i=document.createElement("img");i.className="ic";i.src=c.image;i.loading="lazy";i.referrerPolicy="no-referrer";i.onerror=()=>i.remove();top.append(i)}
+ const nm=el("div");const a=link("$"+c.symbol,"https://fomo.family/tokens/"+c.chain+"/"+c.address);const t=el("div","nm");t.append(a);nm.append(t,el("div","dim",(c.name||"")+" · "+c.chain));top.append(nm);b.append(top);
+ const ch=el("div","chips");const chip=(txt,cl)=>ch.append(el("span","chip "+(cl||""),txt));
+ chip("MC "+km2(c.mc));chip("Pool "+km2(c.liq));chip("1h "+(c.pc1h==null?"n/a":pct(c.pc1h)),(c.pc1h||0)>=0?"good":"bad");if(c.vol1h!=null)chip("Vol 1h "+km2(c.vol1h));if(c.age_h!=null)chip(c.age_h<48?c.age_h+"h old":Math.round(c.age_h/24)+"d old");
+ if(c.buyers)chip(c.buyers+" traders bought");if(c.boosted)chip("boosted","warn");
+ if(c.risk!=null)chip("rug risk "+c.risk+"%",c.risk>=50?"bad":c.risk>=30?"warn":"good");if(c.safety)chip(c.safety==="pass"?"passes safety":"fails: "+c.safety.slice(0,40),c.safety==="pass"?"good":"bad");b.append(ch);
+ if(extra)b.append(extra);if(c.description)b.append(el("div","desc",c.description));
+ const ln=el("div","links");(c.links||[]).forEach(l=>{if(l&&l.url){const x=link(l.type||"link",l.url);ln.append(x)}});ln.append(link("chart","https://dexscreener.com/"+c.chain+"/"+c.address));b.append(ln);d.append(b);return d}
+async function loadTrends(){try{const r=await fetch("api/trends?k="+encodeURIComponent(K),{cache:"no-store"});const s=await r.json();renderTrends(s)}catch(e){$("tr-upd").textContent="Couldn't load trends ("+e.message+")"}}
+function renderTrends(s){if(!s.updated){$("tr-upd").textContent="Trends are still loading (first update takes a few minutes after the bot starts).";return}
+ $("tr-upd").textContent="Updated "+ago(s.updated)+" · refreshes every 5 minutes · picks are ideas to check, not buy signals";
+ const empty=t=>[el("div","empty",t)];
+ $("tr-sugg").replaceChildren(...(s.suggestions.length?s.suggestions.map(c=>{const w=el("div","why");w.textContent="Why: "+c.reasons.join(" · ");return coinCard(c,w)}):empty("Nothing strong enough right now.")));
+ $("tr-trump").replaceChildren(...(s.trump.length?s.trump.map(p=>{const d=el("div","post");const txt=(p.title&&!p.title.startsWith("http"))?p.title:p.text;d.append(el("div",null,txt));const m=el("div","dim");m.style.fontSize="12px";m.style.marginTop="4px";m.append(document.createTextNode(ago(p.ts)+" · "));m.append(link("open post",p.link));d.append(m);return d}):empty("No posts loaded.")));
+ $("tr-match").replaceChildren(...(s.matches.length?s.matches.map(c=>{const w=el("div","why");w.append(document.createTextNode("Matches: "+c.words.join(", ")));(c.headlines||[]).forEach(h=>{const x=el("div","dim");x.style.fontSize="12px";x.append(link(h.title,h.link));w.append(x)});return coinCard(c,w)}):empty("No coins matching today's news yet.")));
+ $("tr-hot").replaceChildren(...(s.hot.length?s.hot.map(c=>{const w=el("div","why");w.textContent=(c.your_traders&&c.your_traders.length?"Your traders: "+c.your_traders.map(t=>"@"+t).join(", ")+" · ":"")+"net "+km2(Math.abs(c.net))+(c.net<0?" selling":" buying");return coinCard(c,w)}):empty("Quiet on Fomo.")));
+ $("tr-words").replaceChildren(...(s.words.length?s.words.map(w=>el("span",null,w)):empty("…")));
+ $("tr-news").replaceChildren(...(s.news.length?s.news.map(n=>{const d=el("div","item");const w=el("div");w.append(link(n.title,n.link));d.append(w,el("span","dim",ago(n.ts)));d.append(el("div","sub",(n.source||"")+" · "+n.topic));return d}):empty("No headlines.")));
+ $("tr-prof").replaceChildren(...(s.profiles.length?s.profiles.map(c=>coinCard(c)):empty("No new profiles.")));
+ const rec=(s.picks_record||[]);const pc=(a,b)=>b==null||b<0||!a?"…":pct((b/a-1)*100);
+ $("tr-record").replaceChildren(...(rec.length?rec.map(r=>{const d=el("div","item");d.append(el("b",null,"$"+r.symbol),el("span","dim","1h "+pc(r.p0,r.p1h)+" · 6h "+pc(r.p0,r.p6h)+" · 24h "+pc(r.p0,r.p24h)));return d}):empty("No picks graded yet. Each pick is checked 1h, 6h and 24h later.")))}
+setInterval(()=>{if(TAB==="trends")loadTrends()},60000);
+try{if(localStorage.getItem("gk_tab")==="trends")tab("trends")}catch(_){ }
 function toast(e){const t=el("div","toast "+e.type);const n=NAMES[e.strategy]||e.strategy;
  t.textContent=e.type==="buy"?"🟢 "+n+" bought $"+e.symbol+" · "+money(e.usd):e.type==="partial"?((e.reason||"").includes("moonbag")?"🌙 "+n+" took profit on $"+e.symbol+", kept a moonbag · ":"🟡 "+n+" sold half of $"+e.symbol+" · ")+money(e.usd):
   "🔴 "+n+" sold $"+e.symbol+" · "+(e.pnl!=null?sgn(e.pnl):"")+(e.reason?" · "+e.reason:"");
