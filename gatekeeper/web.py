@@ -135,7 +135,7 @@ def state(runner):
                 "pnl_pct": round(pnl / pos.size_usd * 100, 1), "move_pct": round((price / pos.spot_at_entry - 1) * 100, 1) if pos.spot_at_entry else None,
                 "took_half": pos.took_half, "liq": round(liq), "why": pos.why,
                 "mc_in": _mc(pos.spot_at_entry, _supply(con, mint)), "mc_now": _mc(price, _supply(con, mint)),
-                "stats": _coin_stats(con, mint),
+                "stats": _coin_stats(con, mint), "risk": pos.risk,
                 "log": [{"ts": g.get("ts"), "side": g.get("side"), "usd": round(g.get("usd") or 0, 2),
                          "mc": _mc(g.get("spot"), _supply(con, mint)), "why": g.get("why") or ""} for g in pos.legs],
                 "stop_at": round(pos.spot_at_entry * (1 - st.p["STOP_LOSS_PCT"] / 100), 12),
@@ -353,7 +353,7 @@ const t=ms=>{const d=new Date(ms);return d.toLocaleString([], {month:"short",day
 const mcf=v=>{if(!v)return null;if(v>=1e9)return "$"+(+(v/1e9).toFixed(2))+"B MC";if(v>=1e6)return "$"+(+(v/1e6).toFixed(2))+"M MC";
  if(v>=1e3)return "$"+(+(v/1e3).toFixed(v>=1e5?0:1))+"K MC";return "$"+Math.round(v)+" MC"};
 const dur=ms=>{const m=Math.round(ms/60000);return m<60?m+"m":Math.floor(m/60)+"h "+(m%60)+"m"};
-const NAMES={main:"Main",wide:"Wide",follow:"Follow",momentum:"Momentum"};
+const NAMES={main:"Main",wide:"Wide",follow:"Follow",momentum:"Momentum",survivor:"Survivor"};
 function link(txt,href){if(!href)return el("span",null,txt);const a=el("a",null,txt);a.href=href;a.target="_blank";a.rel="noopener";return a}
 function spark(pts){const ns="http://www.w3.org/2000/svg",s=document.createElementNS(ns,"svg");s.setAttribute("viewBox","0 0 300 70");s.setAttribute("preserveAspectRatio","none");
  if(!pts||pts.length<2)return s;const ys=pts.map(p=>p[1]).concat([0]);const lo=Math.min(...ys),hi=Math.max(...ys),r=(hi-lo)||1;
@@ -405,6 +405,7 @@ function render(s){
  $("open").replaceChildren(...(o.length?o.map(p=>{const d=el("div","item");const n=link("$"+p.symbol,p.link);const w=el("div");w.append(n,el("span","tag",NAMES[p.strategy]||p.strategy));if(p.took_half)w.append(el("span","tag","sold half"));
   d.append(w,el("b",cls(p.pnl),sgn(p.pnl)+" ("+pct(p.pnl_pct)+")"));
   if(p.mc_in)d.append(el("div","sub","Bought at "+mcf(p.mc_in)+" · now "+(mcf(p.mc_now)||"?")));
+  if(p.risk!=null){const rk=el("div","sub","Rug risk at entry: "+Math.round(p.risk)+"%"+(p.risk>=50?" · will take a quick profit and leave":""));rk.style.color=p.risk>=50?"var(--down)":p.risk>=30?"var(--warn)":"var(--up)";d.append(rk)}
   {const g=el("div","stats"),S=p.stats||{};const cell=(k,v,c)=>{const b=el("div","stat");b.append(el("div","k",k),el("div","v "+(c||""),v));g.append(b)};
    const km=v=>v==null?"n/a":(v>=1e6?"$"+(v/1e6).toFixed(2)+"M":v>=1e3?"$"+(v/1e3).toFixed(1)+"K":"$"+Math.round(v));
    cell("Market cap",(mcf(p.mc_now)||"n/a").replace(" MC",""));cell("Pool",km(p.liq));

@@ -85,6 +85,13 @@ STRATEGY_DEFAULTS = {
     "MOM_MAX_PCT": 150,             # ...but not more (don't buy a vertical candle)
     "MOM_NEAR_HIGH_PCT": 10,        # and within this much of its high (breaking out, not fading)
     "MOM_BUY_RATIO": 1.3,           # buys at least 1.3x sells in the last 5 min
+    # --- take-profit and rug-risk exits ---
+    "TAKE_PROFIT_PCT": 0,           # sell everything once up this much (0 = off; half-at-2x rules apply instead)
+    "RUG_RISK_MIN": 50,             # if the rug-risk score at entry is this high or more...
+    "RUG_TP_PCT": 40,               # ...sell everything once up this much (0 = off). Quick profit, then leave
+    # --- survivor entries (ENTRY_MODE "survivor"): coins that lived through the dangerous hours ---
+    "SURV_MIN_PCT": 5,              # price up at least this much over the last hour (a steady climb)
+    "SURV_MAX_PCT": 40,             # ...but not more (not a spike)
 }
 
 
@@ -99,6 +106,13 @@ PRESETS = {
     },
     # buys when 2+ of your Fomo traders buy the same coin and it passes safety; same exits
     "follow": {"ENTRY_MODE": "signal", "MAX_OPEN": 8, "MIN_LIQ_USD": 10000, "MAX_TOP10_PCT": 35},
+    # buys coins 4 to 48 hours old that survived, have a real pool and are climbing steadily; aims for +30%
+    "survivor": {
+        "ENTRY_MODE": "survivor", "MIN_AGE_MIN": 240, "MAX_AGE_MIN": 2880, "MIN_LIQ_USD": 25000,
+        "MAX_TOP10_PCT": 30, "MAX_INSIDERS": 10, "MIN_M5_TXNS": 10, "LIQ_HOLD_PCT": 95, "MAX_OPEN": 8,
+        "TAKE_PROFIT_PCT": 30, "TAKE_HALF_X": 99, "STOP_LOSS_PCT": 15, "MAX_HOLD_MIN": 720,
+        "LOCK_START_PCT": 20, "LOCK_TRAIL_PCT": 10, "SELL_PRESSURE_EXIT": 1, "LIQ_DRAIN_PCT": 15,
+    },
     # active day-trader style: buys new coins breaking out, takes profit fast, cuts losers fast, keeps a small moonbag
     "momentum": {
         "ENTRY_MODE": "momentum", "MIN_AGE_MIN": 5, "MAX_AGE_MIN": 240, "MIN_LIQ_USD": 12000,
@@ -109,7 +123,7 @@ PRESETS = {
     },
 }
 ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main,wide,follow").split(",") if x.strip()]
-ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,wide,follow,momentum").split(",") if x.strip() in PRESETS]
+ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,follow,survivor").split(",") if x.strip() in PRESETS]
 
 
 def strategy_params(overrides=None, preset="main"):

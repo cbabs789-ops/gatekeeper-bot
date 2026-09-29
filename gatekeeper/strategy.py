@@ -77,6 +77,7 @@ class Position:
     trade_id: int = None
     max_liq: float = 0.0
     moon: bool = False
+    risk: float = None                 # rug-risk score at entry (0-100), set by the live runner
 
 
 class Strategy:
@@ -159,7 +160,22 @@ class Strategy:
         pull = (1 - s["price"] / cs.peak_price) * 100 if cs.peak_price else 0
         b, se = s.get("buys_m5") or 0, s.get("sells_m5") or 0
         mom = None
-        if p.get("ENTRY_MODE") == "momentum":
+        if p.get("ENTRY_MODE") == "survivor":
+            ref60 = cs.at_or_after(s["ts"] - 60 * MIN)
+            if not ref60 or ref60[0] > s["ts"] - 50 * MIN or not ref60[1]:
+                fails.append("not enough price history yet")
+            else:
+                mom = (s["price"] / ref60[1] - 1) * 100
+                if not (p["SURV_MIN_PCT"] <= mom <= p["SURV_MAX_PCT"]):
+                    fails.append("not a steady climb (%+.0f%% in 1h)" % mom)
+                if ref60[2] and s["liq"] < ref60[2] * p["LIQ_HOLD_PCT"] / 100:
+                    fails.append("pool shrinking over the hour")
+            bh, sh = s.get("buys_h1") or 0, s.get("sells_h1") or 0
+            if bh < sh:
+                fails.append("sellers winning over the hour (%d/%d)" % (bh, sh))
+            if b < se:
+                fails.append("sellers winning (%d/%d)" % (b, se))
+        elif p.get("ENTRY_MODE") == "momentum":
             ref5 = cs.at_or_after(s["ts"] - 5 * MIN)
             if not ref5 or ref5[0] > s["ts"] - 4 * MIN or not ref5[1]:
                 fails.append("not enough price history yet")
@@ -187,8 +203,12 @@ class Strategy:
         ref = cs.at_or_after(s["ts"] - 10 * MIN)
         if ref and ref[2] > 0 and s["liq"] < ref[2] * p["LIQ_HOLD_PCT"] / 100:
             fails.append("liquidity falling")
-        move = ("breaking out: %+.0f%% in 5 min, %.0f%% off its high" % (mom, pull)) if p.get("ENTRY_MODE") == "momentum" and mom is not None \
-            else "ran %.1fx, now %.0f%% off the peak" % (runup, pull)
+        if p.get("ENTRY_MODE") == "momentum" and mom is not None:
+            move = "breaking out: %+.0f%% in 5 min, %.0f%% off its high" % (mom, pull)
+        elif p.get("ENTRY_MODE") == "survivor" and mom is not None:
+            move = "survived %.1fh, climbing steadily: %+.0f%% over the last hour" % (age / 60, mom)
+        else:
+            move = "ran %.1fx, now %.0f%% off the peak" % (runup, pull)
         why = ["%.0f min since graduation" % age, move,
                "%d buys vs %d sells in 5m" % (b, se), "liquidity $%s" % format(int(s["liq"]), ",")]
         if saf:
@@ -276,6 +296,11 @@ class Strategy:
         ref = cs.at_or_after(ts - 5 * MIN)
         if ref and ref[0] < ts and ref[2] > 0 and liq < ref[2] * (1 - p["LIQ_PULL_PCT"] / 100):
             return self._close(pos, cs, ts, price, liq, "Liquidity pulled (-%.0f%% in 5 min)" % ((1 - liq / ref[2]) * 100), panic=True)
+        gain = (price / pos.spot_at_entry - 1) * 100 if pos.spot_at_entry else 0
+        if not pos.moon and p.get("RUG_TP_PCT") and pos.risk is not None and pos.risk >= p["RUG_RISK_MIN"] and gain >= p["RUG_TP_PCT"]:
+            return self._close(pos, cs, ts, price, liq, "Quick profit: rug risk %.0f%%, took +%.0f%% and left" % (pos.risk, gain))
+        if not pos.moon and p.get("TAKE_PROFIT_PCT") and gain >= p["TAKE_PROFIT_PCT"]:
+            return self._close(pos, cs, ts, price, liq, "Took profit (+%.0f%%)" % gain)
         if pos.moon:
             if price <= pos.peak_after * (1 - p["MOON_TRAIL_PCT"] / 100):
                 return self._close(pos, cs, ts, price, liq, "Moonbag trailing stop (peak was %.1fx)" % (pos.peak_after / pos.spot_at_entry))

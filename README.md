@@ -39,6 +39,9 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 
 23. **Momentum strategy (day-trader style).** Buys safe new coins (5 min to 4 hours old) that are breaking out: up 15 to 150% in 5 minutes, within 10% of their high, buyers 1.3x sellers, 25+ trades in 5 minutes, pool $12K+ and holding. Takes half at 1.4x, stops at -15%, locks gains once up 15%, never lets a 20% gain turn into a loss, exits on heavy selling or a draining pool, 90-minute limit, keeps a 20% moonbag. `/test` includes six Momentum variations.
 
+24. **Rug-risk score.** Every coin's vital signs (pool, holders, insiders, LP lock, socials, dev history, buying pressure, momentum) are logged at 30, 60, 120 and 240 minutes old, and the bot tracks whether each one drained within 12 hours. Hourly, it relearns which signs predict a rug and scores every buy ("rug risk 62%"). If a trade's risk is 50%+ it takes a quick profit at +40% and leaves (`RUG_RISK_MIN`, `RUG_TP_PCT`). Rough rule-based estimates until 300 coins have finished. `/risk` shows what it has learned.
+25. **Survivor strategy.** Coins that lived 4 to 48 hours with a $25K+ pool, climbing 5 to 40% over the last hour with buyers ahead: sells everything at +30%, stop at -15%, profit lock, 12h limit. Coins with a $25K+ pool keep being watched for up to 48 hours so there's data on them. `/test` includes four Survivor variations.
+
 ## Install (fresh Ubuntu server, as root)
 
 ```

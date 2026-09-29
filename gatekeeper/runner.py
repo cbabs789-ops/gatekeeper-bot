@@ -12,7 +12,7 @@ import aiohttp
 import html
 import re
 
-from . import config, db, fomo, followtest, notify, report, research, sweep, web
+from . import config, db, fomo, followtest, notify, report, research, risk, sweep, web
 from .sources import CHAINS, EVM_RE, SOL_RE, dexscreener_batch, pair_to_snapshot, pumpportal_stream, safety_check
 from .strategy import MIN, Position, Strategy
 
@@ -60,6 +60,8 @@ class Runner:
         self.sweeping = False
         self.tracking = set()
         self.sell_warned = {}
+        risk.ensure(self.con)
+        self.rug_model = risk.load(self.con)
         self.epochs = {}
         for name, st in self.strats.items():
             self._epoch(name, st)
@@ -112,6 +114,8 @@ class Runner:
                         pos.moon = True
             cs = strat.coins.get(r["mint"])
             pos.peak_after = cs.peak_price if cs else pos.spot_at_entry
+            m = re.search(r"rug risk (\d+)%", pos.why or "")
+            pos.risk = float(m.group(1)) if m else None
             strat.positions[r["mint"]] = pos
         log.info("[%s] restored %d coins, %d open positions", name, len(strat.coins), len(strat.positions))
 
@@ -158,6 +162,7 @@ class Runner:
         for chain in CHAINS:
             cm = [m for m in mints if (coins[m].get("chain") or "solana") == chain]
             batches += [(chain, cm[i:i + 30]) for i in range(0, len(cm), 30)]
+        risk_snaps = {}
         for bi, (chain, batch) in enumerate(batches):
             pairs = await dexscreener_batch(self.session, batch, chain)
             for mint, pair in pairs.items():
@@ -179,23 +184,38 @@ class Runner:
                 self.con.execute("INSERT INTO snapshots VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                  (mint, now, s["price"], s["liq"], s["fdv"], s["vol_m5"], s["vol_h1"], s["buys_m5"],
                                   s["sells_m5"], s["buys_h1"], s["sells_h1"], s["pc_m5"], s["pc_h1"]))
+                grad_age = (now - (c.get("graduated_at") or now)) / MIN
+                risk.log(self.con, mint, s, self.safety.get(mint), s.get("_socials"), grad_age, now)
+                risk_snaps[mint] = (s["price"], s["liq"])
                 for name, st in self.strats.items():
                     for a in st.on_snapshot(s, c):
                         await self.act(a, name)
                 age_min = (now - (c.get("added_at") or c["graduated_at"])) / MIN
                 if s["liq"] < p["DEAD_LIQ_USD"] and age_min > 30 and not self.any_open(mint):
                     self.con.execute("UPDATE coins SET status='dead' WHERE mint=?", (mint,))
+                    risk.mark_dead(self.con, mint, now)
             if bi + 1 < len(batches):
                 await asyncio.sleep(1)
+        risk.update_outcomes(self.con, risk_snaps, now)
         # coins DexScreener never listed, or that aged out
+        surv_liq = float(config.os.environ.get("GK_SURVIVOR_LIQ_USD", "25000"))
+        surv_hours = float(config.os.environ.get("GK_SURVIVOR_WATCH_HOURS", "48"))
         for mint, c in coins.items():
             age_min = (now - (c.get("added_at") or c["graduated_at"])) / MIN
             if self.any_open(mint):
                 continue
-            if age_min > p["WATCH_HOURS"] * 60:
+            # coins that survived with a real pool keep being watched (up to 48h) for the Survivor strategy
+            survivor = self.last_liq.get(mint, 0) >= surv_liq and age_min <= surv_hours * 60
+            if age_min > p["WATCH_HOURS"] * 60 and not survivor:
                 self.con.execute("UPDATE coins SET status='expired' WHERE mint=?", (mint,))
             elif mint not in seen and age_min > 30 and (now - (c["last_seen"] or 0)) / MIN > 20:
                 self.con.execute("UPDATE coins SET status='dead' WHERE mint=?", (mint,))
+                risk.mark_dead(self.con, mint, now)
+        if self.tick % 120 == 0:        # about hourly: relearn rug risk from finished coins
+            try:
+                self.rug_model = await asyncio.to_thread(lambda: risk.build(db.connect()))
+            except Exception:  # noqa: BLE001
+                log.exception("Rug model build failed")
         for name, st in self.strats.items():
             for a in st.on_tick(now):
                 await self.act(a, name)
@@ -271,6 +291,16 @@ class Runner:
             await asyncio.sleep(20)
 
     # ------------------------------------------------------------ actions -> db + telegram
+    def rug_risk(self, mint):
+        """(score 0-100, how it was made) for a coin right now, or (None, '') if there's no snapshot."""
+        r = self.con.execute("SELECT * FROM snapshots WHERE mint=? ORDER BY ts DESC LIMIT 1", (mint,)).fetchone()
+        c = self.con.execute("SELECT graduated_at, socials FROM coins WHERE mint=?", (mint,)).fetchone()
+        if not r or not c:
+            return None, ""
+        age = (now_ms() - (c["graduated_at"] or now_ms())) / MIN
+        row = risk.live_row(dict(r), self.safety.get(mint), c["socials"], age)
+        return risk.score(self.rug_model, row)
+
     def supply(self, mint):
         """Token supply (market cap / price) from the latest snapshot, for showing market caps."""
         r = self.con.execute("SELECT price, fdv FROM snapshots WHERE mint=? AND price>0 AND fdv>0 ORDER BY ts DESC LIMIT 1", (mint,)).fetchone()
@@ -281,6 +311,9 @@ class Runner:
         alert = name in config.ALERT_PRESETS
         tag = "" if name == "main" else "[%s] " % name.upper()
         if a["type"] == "buy":
+            pos.risk, pos.risk_how = self.rug_risk(pos.mint)
+            if pos.risk is not None:
+                pos.why = (pos.why + "; " if pos.why else "") + "rug risk %d%% (%s)" % (pos.risk, pos.risk_how)
             cur = self.con.execute(
                 "INSERT INTO trades(mode, run_id, mint, symbol, opened_at, entry_price, size_usd, qty, why_entered, legs) "
                 "VALUES('live',?,?,?,?,?,?,?,?,?)",
@@ -560,6 +593,8 @@ class Runner:
                         asyncio.create_task(self.run_scan())
                     elif cmd in ("/traders", "traders", "/scorecard"):
                         await notify.send(self.session, fomo.scorecard_text(self.con))
+                    elif cmd in ("/risk", "risk", "/rug"):
+                        await notify.send(self.session, risk.report(self.con))
                     elif cmd in ("/research", "research"):
                         await notify.send(self.session, await asyncio.to_thread(self._research))
                     elif cmd in ("/fill", "fill"):
@@ -586,7 +621,7 @@ class Runner:
                             days = 7
                         asyncio.create_task(self.run_sweep(days))
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/risk: what the rug-risk model has learned")
                     elif cmd.startswith("/"):
                         await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
             except Exception as e:  # noqa: BLE001
@@ -616,6 +651,7 @@ class Runner:
                 fomo.ensure_schema(self.con)
                 self.con.execute("DELETE FROM fomo_events WHERE ts < ?", (now_ms() - 30 * 86400000,))
                 self.con.execute("DELETE FROM trader_calls WHERE ts < ?", (now_ms() - 30 * 86400000,))
+                self.con.execute("DELETE FROM coin_features WHERE ts < ?", (now_ms() - 45 * 86400000,))
                 db.kv_set(self.con, "pruned", key)
             await asyncio.sleep(60)
 

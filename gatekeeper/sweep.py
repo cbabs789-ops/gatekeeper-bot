@@ -41,6 +41,11 @@ VARIANTS = [
     # --- moonbag: keep a slice after taking profit to catch the rare huge runner ---
     ("New coins + 20% moonbag", {"MOONBAG_PCT": 20}, "wide"),
     ("New coins + all protections + 20% moonbag", dict(PROTECT, MOONBAG_PCT=20), "wide"),
+    # --- survivors: coins 4h+ old that lived through the dangerous hours, climbing steadily ---
+    ("Survivor (4h+ old, climbing, sell all at +30%)", {}, "survivor"),
+    ("Survivor, sell all at +20%", {"TAKE_PROFIT_PCT": 20}, "survivor"),
+    ("Survivor, pool $50K+", {"MIN_LIQ_USD": 50000}, "survivor"),
+    ("Survivor, 2h+ old instead of 4h+", {"MIN_AGE_MIN": 120}, "survivor"),
     # --- momentum (day-trader style): buy breakouts, quick profits, tight stops ---
     ("Momentum (as set)", {}, "momentum"),
     ("Momentum, stronger breakouts only (+25% in 5 min)", {"MOM_MIN_PCT": 25}, "momentum"),
