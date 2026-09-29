@@ -19,24 +19,34 @@ def _med(v):
 
 def _group_stats(rows):
     ch = [(r["p6h"] / r["p0"] - 1) * 100 for r in rows]
+    c24 = [(r["p24h"] / r["p0"] - 1) * 100 for r in rows if r.get("p24h") is not None and r["p24h"] >= 0]
     drained = [r for r in rows if r["liq24h"] is not None and r["liq24h"] >= 0 and r["liq0"]]
-    return {"n": len(rows), "med6h": _med(ch), "win": sum(1 for x in ch if x > 10) / len(ch) * 100 if ch else None,
+    coins = {r.get("token_address") for r in rows}
+    # the coin carrying the most buys, so one lucky pump can't pass for a pattern
+    per = defaultdict(int)
+    for r in rows:
+        per[r.get("token_address")] += 1
+    top_share = (max(per.values()) / len(rows) * 100) if rows else 0
+    return {"n": len(rows), "coins": len(coins), "top_share": top_share, "med6h": _med(ch), "med24h": _med(c24), "n24": len(c24),
+            "win": sum(1 for x in ch if x > 10) / len(ch) * 100 if ch else None,
             "drained": (sum(1 for r in drained if r["liq24h"] < r["liq0"] * 0.2) / len(drained) * 100) if drained else None}
 
 
 def _fmt(label, g):
     if not g["n"]:
         return "%s: no data" % label
-    return "%s: %s buys · median %+.0f%% at 6h · %.0f%% up 10%%+%s" % (
-        label, format(g["n"], ","), g["med6h"], g["win"],
-        " · %.0f%% drained" % g["drained"] if g["drained"] is not None else "")
+    return "%s: %s buys on %s coins · median %+.0f%% at 6h%s · %.0f%% up 10%%+%s%s" % (
+        label, format(g["n"], ","), format(g["coins"], ","), g["med6h"],
+        " / %+.0f%% at 24h" % g["med24h"] if g["n24"] >= 10 else "", g["win"],
+        " · %.0f%% drained" % g["drained"] if g["drained"] is not None else "",
+        " · ⚠️ one coin is %.0f%% of these" % g["top_share"] if g["top_share"] >= 30 else "")
 
 
 def compute(con, days=7):
     fomo.ensure_schema(con)
     since = int(time.time() * 1000) - days * DAY
     calls = [dict(r) for r in con.execute(
-        "SELECT symbol, socials, p0, p6h, liq0, liq24h FROM trader_calls WHERE ts>=? AND p0>0 AND p6h>=0", (since,))]
+        "SELECT symbol, token_address, socials, p0, p6h, p24h, liq0, liq24h FROM trader_calls WHERE ts>=? AND p0>0 AND p6h>=0", (since,))]
     out = {"calls": len(calls), "themes": [], "socials": [], "safety": [], "dead_base": None}
 
     by = defaultdict(list)
@@ -56,7 +66,7 @@ def compute(con, days=7):
 
     rows = [dict(r) for r in con.execute(
         "SELECT c.status, s.* FROM coins c JOIN safety s ON s.mint=c.mint "
-        "WHERE c.status IN ('dead','expired') AND COALESCE(c.added_at, c.graduated_at)>=?", (since,))]
+        "WHERE c.status IN ('dead','expired') AND c.source IS NULL AND COALESCE(c.added_at, c.graduated_at)>=?", (since,))]
     flags = [
         ("Mint authority still on", lambda s: not s["mint_revoked"]),
         ("Freeze authority still on", lambda s: not s["freeze_revoked"]),
@@ -92,11 +102,13 @@ def text(con, days=7):
             for i in range(0, len(res["socials"]), 2):
                 (a, ga), (b, gb) = res["socials"][i], res["socials"][i + 1]
                 L += [_fmt(a, ga), _fmt(b, gb)]
-                if ga["n"] >= 30 and gb["n"] >= 30:
+                if ga["n"] >= 30 and gb["n"] >= 30 and ga["coins"] >= 10 and gb["coins"] >= 10:
                     diff = ga["med6h"] - gb["med6h"]
                     L.append("  → %s" % ("real difference (%+.0f points)" % diff if abs(diff) >= 5 else "no real difference"))
+                elif ga["n"] >= 30 and gb["n"] >= 30:
+                    L.append("  → too few different coins to call it yet")
     base, n = res["dead_base"]
-    L.append("\n<b>Which safety warnings predicted a dead coin</b>")
+    L.append("\n<b>Which safety warnings predicted a dead coin</b> (new pump.fun coins only)")
     if base is None:
         L.append("Not enough finished coins yet.")
     else:
