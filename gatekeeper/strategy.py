@@ -184,6 +184,13 @@ class Strategy:
                 fails.append("sellers winning over the hour (%d/%d)" % (bh, sh))
             if b < se:
                 fails.append("sellers winning (%d/%d)" % (b, se))
+        elif p.get("ENTRY_MODE") == "moonshot":
+            if p.get("MOON_NEED_FIRST_DEV") and (not saf or saf.get("creator_prev") is None or saf["creator_prev"] > 0):
+                fails.append("not the dev's first coin")
+            if p.get("MOON_NEED_X") and "x" not in (cs.socials or "").split(","):
+                fails.append("no X account")
+            if b < se:
+                fails.append("sellers winning (%d/%d)" % (b, se))
         elif p.get("ENTRY_MODE") == "momentum":
             ref5 = cs.at_or_after(s["ts"] - 5 * MIN)
             if not ref5 or ref5[0] > s["ts"] - 4 * MIN or not ref5[1]:
@@ -216,6 +223,8 @@ class Strategy:
             move = "breaking out: %+.0f%% in 5 min, %.0f%% off its high" % (mom, pull)
         elif p.get("ENTRY_MODE") == "survivor" and mom is not None:
             move = "survived %.1fh, climbing steadily: %+.0f%% over the last hour" % (age / 60, mom)
+        elif p.get("ENTRY_MODE") == "moonshot":
+            move = "early moonshot signs: dev's first coin, has X, %.1fx since graduation" % runup
         else:
             move = "ran %.1fx, now %.0f%% off the peak" % (runup, pull)
         why = ["%.0f min since graduation" % age, move,

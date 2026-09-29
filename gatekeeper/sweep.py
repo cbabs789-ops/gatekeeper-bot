@@ -53,6 +53,14 @@ VARIANTS = [
     ("Survivor + rug score + wider stop (-25%)", {"STOP_LOSS_PCT": 25}, "survivor", True),
     ("Survivor + rug score + no heavy-selling exit", {"SELL_PRESSURE_EXIT": 0}, "survivor", True),
     ("Current Main + rug score", {}, "main", True),
+    # --- moonshot hunter: $20 bets on young coins with early 10x signs (dev's first coin, has X) ---
+    ("Moonshot Hunter (20-60 min, dev's first coin, has X, half at 3x)", {}, "moonshot"),
+    ("Moonshot, dev's first coin only (X not required)", {"MOON_NEED_X": 0}, "moonshot"),
+    ("Moonshot, has X only (any dev)", {"MOON_NEED_FIRST_DEV": 0}, "moonshot"),
+    ("Moonshot, 10-40 min old", {"MIN_AGE_MIN": 10, "MAX_AGE_MIN": 40}, "moonshot"),
+    ("Moonshot, half at 5x", {"TAKE_HALF_X": 5.0}, "moonshot"),
+    ("Moonshot, tighter stop (-30%)", {"STOP_LOSS_PCT": 30}, "moonshot"),
+    ("Moonshot + rug score (skip 60%+)", {"RISK_SKIP": 60}, "moonshot", True),
     # --- momentum (day-trader style): buy breakouts, quick profits, tight stops ---
     ("Momentum (as set)", {}, "momentum"),
     ("Momentum, stronger breakouts only (+25% in 5 min)", {"MOM_MIN_PCT": 25}, "momentum"),
@@ -129,7 +137,7 @@ def text(res):
     hours = (res["to"] - res["from"]) / 3600000
     L = ["🧪 <b>Rule test</b> on %.1f days of recorded coins (%s snapshots)" % (hours / 24, format(res["rows"], ",")),
          "Each line: trades · win rate · total profit · first half / second half",
-         "A rule is only real if both halves are positive.\n"]
+         "A rule is only real if both halves are positive. Moonshot lines use $20 bets.\n"]
     ranked = sorted(res["results"], key=lambda r: (r[3].get("total_pnl", 0) if r[3].get("trades") else -1e9), reverse=True)
     for label, all_, a, b in ranked:
         if not all_.get("trades"):
@@ -139,5 +147,5 @@ def text(res):
         L.append("%s<b>%s</b>: %d · %.0f%% · $%s · $%s / $%s" % (
             "✅ " if both else "", label, all_["trades"], all_["win_rate"], format(int(all_["total_pnl"]), ","),
             format(int(a.get("total_pnl", 0)), ","), format(int(b.get("total_pnl", 0)), ",")))
-    L.append("\nEach trade is $100 of fake money. Nothing changes until you pick a rule.")
+    L.append("\nEach trade is $100 of fake money ($20 for Moonshot). Nothing changes until you pick a rule.")
     return "\n".join(L)

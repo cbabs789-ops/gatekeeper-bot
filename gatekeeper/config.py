@@ -97,6 +97,9 @@ STRATEGY_DEFAULTS = {
     # --- survivor entries (ENTRY_MODE "survivor"): coins that lived through the dangerous hours ---
     "SURV_MIN_PCT": 5,              # price up at least this much over the last hour (a steady climb)
     "SURV_MAX_PCT": 40,             # ...but not more (not a spike)
+    # --- moonshot entries (ENTRY_MODE "moonshot"): young coins with the two early signs /moonshots found ---
+    "MOON_NEED_FIRST_DEV": 1,       # 1 = only coins that are the dev's first launch (4.2x more likely to go 10x)
+    "MOON_NEED_X": 1,               # 1 = only coins with an X account (2.2x more likely to go 10x)
 }
 
 
@@ -117,6 +120,13 @@ PRESETS = {
         "MAX_TOP10_PCT": 30, "MAX_INSIDERS": 10, "MIN_M5_TXNS": 10, "LIQ_HOLD_PCT": 95, "MAX_OPEN": 8,
         "TAKE_PROFIT_PCT": 30, "TAKE_HALF_X": 99, "STOP_LOSS_PCT": 15, "MAX_HOLD_MIN": 720,
         "LOCK_START_PCT": 20, "LOCK_TRAIL_PCT": 10, "SELL_PRESSURE_EXIT": 1, "LIQ_DRAIN_PCT": 15,
+    },
+    # small bets on young coins showing the early signs of a 10x-50x runner; sells half at 3x, lets the rest ride
+    "moonshot": {
+        "ENTRY_MODE": "moonshot", "MIN_AGE_MIN": 20, "MAX_AGE_MIN": 60, "MIN_LIQ_USD": 10000, "POSITION_USD": 20,
+        "MAX_TOP10_PCT": 30, "MAX_INSIDERS": 10, "MIN_M5_TXNS": 10, "LIQ_HOLD_PCT": 85, "MAX_OPEN": 15,
+        "TAKE_HALF_X": 3.0, "TRAIL_PCT": 50, "STOP_LOSS_PCT": 50, "MAX_HOLD_MIN": 660, "LIQ_PULL_PCT": 35,
+        "RUG_TP_PCT": 0, "ADAPTIVE_TARGETS": 0, "RISK_SKIP": 100, "RISK_SIZING": 0,
     },
     # active day-trader style: buys new coins breaking out, takes profit fast, cuts losers fast, keeps a small moonbag
     "momentum": {

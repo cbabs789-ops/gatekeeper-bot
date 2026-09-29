@@ -14,7 +14,7 @@ import re
 
 from . import config, db, fomo, followtest, notify, report, research, risk, stats, sweep, trench, trends, web
 from .sources import CHAINS, EVM_RE, SOL_RE, dexscreener_batch, pair_to_snapshot, pumpportal_stream, safety_check
-from .strategy import MIN, Position, Strategy
+from .strategy import MIN, PaperBroker, Position, Strategy
 
 log = logging.getLogger("gatekeeper")
 TZ = ZoneInfo(config.TIMEZONE)
@@ -71,6 +71,31 @@ class Runner:
             self._epoch(name, st)
         for name, st in self.strats.items():
             self._restore(name, st)
+        self._close_orphans()
+
+    def _close_orphans(self):
+        """Paper trades left open by a strategy that's since been turned off: nothing manages them, so close them
+        at the last price we recorded (with normal selling costs) instead of letting them sit open forever."""
+        live = list(self.strats)
+        rows = self.con.execute("SELECT * FROM trades WHERE mode='live' AND closed_at IS NULL AND COALESCE(run_id,'main') NOT IN (%s)"
+                                % ",".join("?" * len(live)), live).fetchall()
+        p = self.p
+        for r in rows:
+            snap = self.con.execute("SELECT ts, price, liq FROM snapshots WHERE mint=? ORDER BY ts DESC LIMIT 1", (r["mint"],)).fetchone()
+            legs = json.loads(r["legs"] or "[]")
+            proceeds = sum(l.get("usd") or 0 for l in legs[1:] if l.get("side") == "sell")
+            sold = sum(l.get("qty") or 0 for l in legs[1:] if l.get("side") == "sell")
+            qty = max((r["qty"] or 0) - sold, 0)
+            price, liq, ts = (snap["price"], snap["liq"], snap["ts"]) if snap and snap["price"] else (0, 0, now_ms())
+            got = PaperBroker(p).sell(price, liq, qty) if price and liq else 0.0
+            proceeds += got
+            pnl = proceeds - (r["size_usd"] or 0)
+            reason = "Closed: its strategy (%s) is turned off" % (r["run_id"] or "main")
+            legs.append({"ts": ts, "side": "sell", "spot": price, "usd": got, "why": reason})
+            self.con.execute("UPDATE trades SET closed_at=?, proceeds_usd=?, pnl_usd=?, pnl_pct=?, exit_reason=?, legs=? WHERE id=?",
+                             (max(ts, r["opened_at"]), proceeds, pnl, pnl / r["size_usd"] * 100 if r["size_usd"] else 0, reason,
+                              json.dumps(legs), r["id"]))
+            log.info("Closed orphaned %s trade $%s: %+.2f", r["run_id"], r["symbol"], pnl)
 
     def _epoch(self, name, st):
         """When a strategy's rules last changed, so results can be shown for the current rules only."""
