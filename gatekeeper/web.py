@@ -502,15 +502,15 @@ function tab(t){TAB=t;["trading","trends","trench"].forEach(x=>{$("tab-"+x).hidd
 const sw=w=>w.slice(0,4)+"…"+w.slice(-4);
 async function loadTrench(){try{const r=await fetch("api/trench?k="+encodeURIComponent(K),{cache:"no-store"});renderTrench(await r.json())}catch(e){$("tn-upd").textContent="Couldn't load ("+e.message+")"}}
 function renderTrench(s){if(!s.has_key){$("tn-upd").textContent="Needs a Helius key (HELIUS_API_KEY).";return}
- $("tn-upd").textContent="Coins studied: "+s.examined+" ("+s.moonshots+" moonshots) · Helius credits today: "+s.credits_today.toLocaleString()+" of "+s.credit_cap.toLocaleString()+" · discovery runs every 6h";
+ $("tn-upd").textContent="Coins studied: "+s.examined+" ("+s.moonshots+" moonshots) · Helius credits today: "+s.credits_today.toLocaleString()+" of "+s.credit_cap.toLocaleString()+" · discovery runs every 3h";
  const empty=t=>[el("div","empty",t)];const fl=(m,sym)=>link("$"+(sym||m.slice(0,6)),"https://fomo.family/tokens/solana/"+m);
  $("tn-hot").replaceChildren(...(s.hot.length?s.hot.map(h=>{const d=el("div","item");const w=el("div");w.append(fl(h.mint,h.symbol));d.append(w,el("b",h.n>=2?"up":"",h.n+" wallet"+(h.n>1?"s":"")));d.append(el("div","sub",(h.sol_in||0).toFixed(2)+" SOL in · last buy "+ago(h.last)));return d}):empty("No trench buys yet.")));
  $("tn-feed").replaceChildren(...(s.feed.length?s.feed.map(e=>{const d=el("div","item");const w=el("div");w.append(document.createTextNode(e.side==="buy"?"🟢 ":"🔴 "),fl(e.mint,e.symbol));d.append(w,el("span","dim",(e.sol||0).toFixed(2)+" SOL"));const sub=el("div","sub");sub.append(link(sw(e.wallet),"https://solscan.io/account/"+e.wallet),document.createTextNode(" · "+ago(e.ts)));d.append(sub);return d}):empty("Waiting for their next trade.")));
  $("tn-wallets").replaceChildren(...(s.wallets.length?s.wallets.map(w=>{const d=el("div","item");const a=el("div");a.append(el("b",null,"#"+w.rank+" "),link(sw(w.wallet),"https://solscan.io/account/"+w.wallet));
   d.append(a,el("b","up",w.hits+" moonshots"));d.append(el("div","sub","early in "+w.hits+" of "+w.seen+" coins studied ("+w.hit_rate+"%) · avg "+w.avg_x+"x · best "+w.best_x+"x"+(w.live_med6h!=null?" · live buys: "+w.live_buys+", 6h median "+pct(w.live_med6h):"")));
-  d.append(el("div","sub","e.g. "+(w.examples||"")));return d}):empty("None yet. The first discovery runs about 2 minutes after the bot starts, then every 6 hours.")));
+  d.append(el("div","sub","e.g. "+(w.examples||"")));return d}):empty("None yet. The first discovery runs about 2 minutes after the bot starts, then every 3 hours.")));
  $("tn-moons").replaceChildren(...(s.moons.length?s.moons.map(m=>{const d=el("div","item");const w=el("div");w.append(fl(m.mint,m.symbol));d.append(w,el("b","up",m.peak_x+"x"));d.append(el("div","sub",(m.buyers>=0?m.buyers+" early buyers read":"history too long to read")));return d}):empty("None studied yet.")))}
-setInterval(()=>{if(TAB==="trench")loadTrench()},30000);
+setInterval(()=>{if(TAB==="trench")loadTrench()},10000);
 const ago=ms=>{const m=Math.round((Date.now()-ms)/60000);return m<60?m+"m ago":m<1440?Math.round(m/60)+"h ago":Math.round(m/1440)+"d ago"};
 const km2=v=>v==null?"n/a":v>=1e9?"$"+(v/1e9).toFixed(2)+"B":v>=1e6?"$"+(v/1e6).toFixed(2)+"M":v>=1e3?"$"+(v/1e3).toFixed(0)+"K":"$"+Math.round(v);
 function coinCard(c,extra){const d=el("div","coin");if(c.header){const h=el("div","hdr");h.style.backgroundImage="url('"+encodeURI(c.header)+"')";d.append(h)}
@@ -524,7 +524,7 @@ function coinCard(c,extra){const d=el("div","coin");if(c.header){const h=el("div
  const ln=el("div","links");(c.links||[]).forEach(l=>{if(l&&l.url){const x=link(l.type||"link",l.url);ln.append(x)}});ln.append(link("chart","https://dexscreener.com/"+c.chain+"/"+c.address));b.append(ln);d.append(b);return d}
 async function loadTrends(){try{const r=await fetch("api/trends?k="+encodeURIComponent(K),{cache:"no-store"});const s=await r.json();renderTrends(s)}catch(e){$("tr-upd").textContent="Couldn't load trends ("+e.message+")"}}
 function renderTrends(s){if(!s.updated){$("tr-upd").textContent="Trends are still loading (first update takes a few minutes after the bot starts).";return}
- $("tr-upd").textContent="Updated "+ago(s.updated)+" · refreshes every 5 minutes · picks are ideas to check, not buy signals";
+ $("tr-upd").textContent="Updated "+ago(s.updated)+" · refreshes every 2 minutes · picks are ideas to check, not buy signals";
  const empty=t=>[el("div","empty",t)];
  $("tr-sugg").replaceChildren(...(s.suggestions.length?s.suggestions.map(c=>{const w=el("div","why");w.textContent="Why: "+c.reasons.join(" · ");return coinCard(c,w)}):empty("Nothing strong enough right now.")));
  $("tr-trump").replaceChildren(...(s.trump.length?s.trump.map(p=>{const d=el("div","post");const txt=(p.title&&!p.title.startsWith("http"))?p.title:p.text;d.append(el("div",null,txt));const m=el("div","dim");m.style.fontSize="12px";m.style.marginTop="4px";m.append(document.createTextNode(ago(p.ts)+" · "));m.append(link("open post",p.link));d.append(m);return d}):empty("No posts loaded.")));
@@ -535,7 +535,7 @@ function renderTrends(s){if(!s.updated){$("tr-upd").textContent="Trends are stil
  $("tr-prof").replaceChildren(...(s.profiles.length?s.profiles.map(c=>coinCard(c)):empty("No new profiles.")));
  const rec=(s.picks_record||[]);const pc=(a,b)=>b==null||b<0||!a?"…":pct((b/a-1)*100);
  $("tr-record").replaceChildren(...(rec.length?rec.map(r=>{const d=el("div","item");d.append(el("b",null,"$"+r.symbol),el("span","dim","1h "+pc(r.p0,r.p1h)+" · 6h "+pc(r.p0,r.p6h)+" · 24h "+pc(r.p0,r.p24h)));return d}):empty("No picks graded yet. Each pick is checked 1h, 6h and 24h later.")))}
-setInterval(()=>{if(TAB==="trends")loadTrends()},60000);
+setInterval(()=>{if(TAB==="trends")loadTrends()},20000);
 try{const t=localStorage.getItem("gk_tab");if(t==="trends"||t==="trench")tab(t)}catch(_){ }
 function toast(e){const t=el("div","toast "+e.type);const n=NAMES[e.strategy]||e.strategy;
  t.textContent=e.type==="buy"?"🟢 "+n+" bought $"+e.symbol+" · "+money(e.usd):e.type==="partial"?((e.reason||"").includes("moonbag")?"🌙 "+n+" took profit on $"+e.symbol+", kept a moonbag · ":"🟡 "+n+" sold half of $"+e.symbol+" · ")+money(e.usd):

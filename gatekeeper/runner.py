@@ -217,7 +217,7 @@ class Runner:
             elif mint not in seen and age_min > 30 and (now - (c["last_seen"] or 0)) / MIN > 20:
                 self.con.execute("UPDATE coins SET status='dead' WHERE mint=?", (mint,))
                 risk.mark_dead(self.con, mint, now)
-        if self.tick % 120 == 0:        # about hourly: relearn rug risk from finished coins
+        if self.tick % 60 == 0:         # every 30 minutes: relearn rug risk from finished coins
             try:
                 self.rug_model = await asyncio.to_thread(lambda: risk.build(db.connect()))
                 for st in self.strats.values():
@@ -530,6 +530,7 @@ class Runner:
             await notify.send(self.session, "A test is already running. Results will show up here when it's done.")
             return
         self.sweeping = True
+        db.kv_set(self.con, "busy_until", now_ms() + 3 * 3600 * 1000)
         await notify.send(self.session, "🧪 Testing %d Follow rules on the last 7 days of Fomo trades. Takes a minute or two." % len(followtest.VARIANTS))
         try:
             res = await asyncio.to_thread(followtest.run, 7)
@@ -539,6 +540,7 @@ class Runner:
             await notify.send(self.session, "Follow test failed: %s" % html.escape(str(e)[:300]))
         finally:
             self.sweeping = False
+            db.kv_set(self.con, "busy_until", 0)
 
     async def risk_backfill(self):
         """Once: rebuild rug-risk history from coins already recorded, so scores are learned from day one."""
@@ -574,6 +576,7 @@ class Runner:
             await notify.send(self.session, "A rule test is already running. Results will show up here when it's done.")
             return
         self.sweeping = True
+        db.kv_set(self.con, "busy_until", now_ms() + 3 * 3600 * 1000)
         await notify.send(self.session, "🧪 Testing %d rule variations on the last %s of recorded coins. Big tests take 30 to 60 minutes; I'll post progress. "
                           "Alerts keep working, but updating or restarting the bot cancels the test." % (
                               len(sweep.VARIANTS), "day" if days == 1 else "%g days" % days))
@@ -589,6 +592,7 @@ class Runner:
             await notify.send(self.session, "Rule test failed: %s" % html.escape(str(e)[:300]))
         finally:
             self.sweeping = False
+            db.kv_set(self.con, "busy_until", 0)
 
     async def run_scan(self):
         await notify.send(self.session, "🔎 Running the Fomo trend scan (about 40 traders, roughly 10,000 of your 250,000 monthly credits). Takes a minute or two.")
@@ -710,6 +714,18 @@ class Runner:
     async def run(self):
         async with aiohttp.ClientSession(headers={"User-Agent": "gatekeeper-bot/1.0"}) as session:
             self.session = session
+            db.kv_set(self.con, "busy_until", 0)
+            ver = db.kv_get(self.con, "installed_version")
+            try:
+                import subprocess
+                cur = subprocess.run(["git", "-C", str(__import__("pathlib").Path(__file__).resolve().parents[1]), "log", "-1", "--format=%h %s"],
+                                     capture_output=True, text=True, timeout=5).stdout.strip()
+            except Exception:  # noqa: BLE001
+                cur = ""
+            if cur and cur != ver:
+                db.kv_set(self.con, "installed_version", cur)
+                if ver:
+                    await notify.send(session, "⬆️ <b>Updated</b>: %s" % html.escape(cur[:180]))
             await notify.send(session, "🤖 Gatekeeper bot started. Strategies: %s. %d open paper trades. Send /help for commands."
                               % (", ".join(self.strats), sum(len(s.positions) for s in self.strats.values())))
             try:

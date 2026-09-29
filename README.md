@@ -52,6 +52,8 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 
 30. **Trench wallets** (needs a free Helius key, `HELIUS_API_KEY`). Every 6 hours the bot reads, from the blockchain, which wallets bought each 10x+ coin between 15 minutes before and 30 minutes after it graduated, plus a sample of coins that went nowhere. Wallets early in 2+ different moonshots (and not buying everything) are ranked by hit rate. The top 40 are watched live via a Helius webhook (polling as a fallback): every trade shows on the dashboard's Trench tab, every buy is graded 1h/6h/24h later in the scorecard, and 2+ of them buying the same coin within 30 minutes sends a ⛏️ alert. `/trench` in Telegram. Helius credits are capped per day (`GK_HELIUS_DAILY_CREDITS`, default 25,000, within the free plan's 1M a month).
 
+31. **Auto-update.** `gatekeeper autoupdate on` installs new versions by itself: every 10 minutes it checks GitHub, and if there's something new (and no `/test` is running) it pulls, restarts and posts "⬆️ Updated" in Telegram. `gatekeeper autoupdate off` to stop. Trends refresh every 2 minutes, trench discovery every 3 hours, the rug model every 30 minutes.
+
 ## Install (fresh Ubuntu server, as root)
 
 ```

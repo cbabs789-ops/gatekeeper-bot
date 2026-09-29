@@ -84,6 +84,7 @@ install -m 644 "$APP/gatekeeper.service" /etc/systemd/system/gatekeeper.service
 systemctl daemon-reload
 systemctl enable -q --now gatekeeper
 systemctl restart gatekeeper
+/usr/local/bin/gatekeeper autoupdate on || true
 sleep 3
 systemctl --no-pager --lines=0 status gatekeeper | head -3 || true
 

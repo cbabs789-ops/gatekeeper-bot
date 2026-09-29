@@ -209,7 +209,7 @@ class Trench:
         last_disc, hooked, announced = 0, False, bool(self.wallets)
         while True:
             try:
-                if time.time() - last_disc > 6 * 3600:
+                if time.time() - last_disc > float(config.os.environ.get("GK_TRENCH_DISCOVER_HOURS", "3")) * 3600:
                     n = await self.discover()
                     last_disc = time.time()
                     if self.wallets:
@@ -225,7 +225,7 @@ class Trench:
                     await self.poll(h)
             except Exception:  # noqa: BLE001
                 log.exception("Trench loop")
-            await asyncio.sleep(300)
+            await asyncio.sleep(60 if not hooked else 300)
 
     # ------------------------------------------------------------------ views
     def state(self):
@@ -260,7 +260,7 @@ class Trench:
         L = ["⛏️ <b>Trench wallets</b>", "Coins examined: %d (%d moonshots) · Helius credits today: %s of %s" % (
             s["examined"], s["moonshots"], format(s["credits_today"], ","), format(s["credit_cap"], ","))]
         if not s["wallets"]:
-            L.append("No wallets with 2+ early moonshot buys yet. Discovery runs every 6 hours.")
+            L.append("No wallets with 2+ early moonshot buys yet. Discovery runs every 3 hours.")
         for w in s["wallets"][:10]:
             L.append("#%d %s: early in %d moonshots of %d coins (%.0f%%) · avg %gx · e.g. %s%s" % (
                 w["rank"], short(w["wallet"]), w["hits"], w["seen"], w["hit_rate"], w["avg_x"], html.escape(w["examples"] or ""),

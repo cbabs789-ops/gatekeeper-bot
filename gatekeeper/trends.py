@@ -304,7 +304,7 @@ class Trends:
 
     async def loop(self):
         await asyncio.sleep(30)
-        every = int(float(config.os.environ.get("GK_TRENDS_MIN", "5")))
+        every = int(float(config.os.environ.get("GK_TRENDS_MIN", "2")))
         while True:
             try:
                 await self.collect()

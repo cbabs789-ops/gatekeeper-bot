@@ -123,6 +123,7 @@ def main():
     sub.add_parser("settings")
     sw = sub.add_parser("sweep")
     sw.add_argument("--days", type=float, default=7)
+    sub.add_parser("busy")
     ft = sub.add_parser("followtest")
     ft.add_argument("--days", type=float, default=7)
     fm = sub.add_parser("fomo")
@@ -145,6 +146,9 @@ def main():
     elif a.cmd == "sweep":
         from . import sweep
         print(plain(sweep.text(sweep.run(a.days, progress=lambda pc: print("  ...%d%% done" % pc, flush=True)))))
+    elif a.cmd == "busy":
+        v = db.kv_get(db.connect(), "busy_until") or 0
+        print("1" if float(v) > time.time() * 1000 else "0")
     elif a.cmd == "followtest":
         from . import followtest
         print(plain(followtest.text(followtest.run(a.days))))
