@@ -12,7 +12,7 @@ import aiohttp
 import html
 import re
 
-from . import config, db, fomo, followtest, notify, report, research, risk, sweep, trench, trends, web
+from . import config, db, fomo, followtest, notify, report, research, risk, stats, sweep, trench, trends, web
 from .sources import CHAINS, EVM_RE, SOL_RE, dexscreener_batch, pair_to_snapshot, pumpportal_stream, safety_check
 from .strategy import MIN, Position, Strategy
 
@@ -643,6 +643,12 @@ class Runner:
                                 L.append("\n<b>Trump's latest</b>: " + html.escape((st["trump"][0]["title"] or st["trump"][0]["text"])[:200]))
                             L.append("\nFull page with pictures and articles: /site → Trends tab")
                             await notify.send(self.session, "\n".join(L))
+                    elif cmd in ("/publish", "publish"):
+                        try:
+                            when = await stats.publish(self)
+                            await notify.send(self.session, "📤 Stats published (%s)." % when)
+                        except Exception as e:  # noqa: BLE001
+                            await notify.send(self.session, "📤 Publish failed: %s" % html.escape(str(e)[:200]))
                     elif cmd in ("/trench", "trench", "/wallets"):
                         await notify.send(self.session, self.trench.text())
                     elif cmd in ("/moonshots", "moonshots", "/50x"):
@@ -677,7 +683,7 @@ class Runner:
                             days = 7
                         asyncio.create_task(self.run_sweep(days))
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early\n/publish: push a stats snapshot to GitHub now")
                     elif cmd.startswith("/"):
                         await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
             except Exception as e:  # noqa: BLE001
@@ -735,7 +741,7 @@ class Runner:
             await asyncio.gather(
                 fomo.Feed(self.con, self.on_fomo_alert, self.track_coin, self.on_trader_sell).run(),
                 pumpportal_stream(self.on_event, config.PUMPPORTAL_API_KEY),
-                self.poll_loop(), self.fast_loop(), self.safety_loop(), self.risk_backfill(), self.trends.loop(), self.trench.loop(), self.telegram_loop(), self.daily_loop(), self.scorecard_loop())
+                self.poll_loop(), self.fast_loop(), self.safety_loop(), self.risk_backfill(), self.trends.loop(), self.trench.loop(), stats.loop(self), self.telegram_loop(), self.daily_loop(), self.scorecard_loop())
 
 
 def main():

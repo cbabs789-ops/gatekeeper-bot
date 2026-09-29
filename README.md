@@ -54,6 +54,8 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 
 31. **Auto-update.** `gatekeeper autoupdate on` installs new versions by itself: every 10 minutes it checks GitHub, and if there's something new (and no `/test` is running) it pulls, restarts and posts "⬆️ Updated" in Telegram. `gatekeeper autoupdate off` to stop. Trends refresh every 2 minutes, trench discovery every 3 hours, the rug model every 30 minutes.
 
+32. **Stats to GitHub.** With `GITHUB_STATS_TOKEN` (a fine-grained token that can write to one private repo, `GK_STATS_REPO`, default `cbabs789-ops/gatekeeper-stats`), the bot publishes `latest.md`, `latest.json` and a daily file under `history/` every hour: status, today/week results, exits, rug model, moonshots, scorecard, trench wallets, research, trend picks, open trades and the last 100 closed trades. No keys are ever included. `/publish` pushes one now.
+
 ## Install (fresh Ubuntu server, as root)
 
 ```
