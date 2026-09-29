@@ -42,6 +42,8 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 24. **Rug-risk score.** Every coin's vital signs (pool, holders, insiders, LP lock, socials, dev history, buying pressure, momentum) are logged at 30, 60, 120 and 240 minutes old, and the bot tracks whether each one drained within 12 hours. Hourly, it relearns which signs predict a rug and scores every buy ("rug risk 62%"). If a trade's risk is 50%+ it takes a quick profit at +40% and leaves (`RUG_RISK_MIN`, `RUG_TP_PCT`). Rough rule-based estimates until 300 coins have finished. `/risk` shows what it has learned.
 25. **Survivor strategy.** Coins that lived 4 to 48 hours with a $25K+ pool, climbing 5 to 40% over the last hour with buyers ahead: sells everything at +30%, stop at -15%, profit lock, 12h limit. Coins with a $25K+ pool keep being watched for up to 48 hours so there's data on them. `/test` includes four Survivor variations.
 
+26. **Smarter exits and rug sizing.** Liquidity exits now compare the pool's depth to what the price move explains (a pool's dollar value shrinks on its own when price dips), so normal dips no longer trigger "liquidity pulled" or "pool draining"; only real removals do. Every buy is scored for rug risk first: 60%+ is skipped (`RISK_SKIP`), and riskier coins get smaller bets (`RISK_SIZING`: full size under 20%, then 75%, 50%, 30%). `STOP_CONFIRM_SEC` lets a stop ride out a brief wick. `/exits` shows, for each exit rule, how often the coin went on to rise after the bot sold versus kept falling.
+
 ## Install (fresh Ubuntu server, as root)
 
 ```

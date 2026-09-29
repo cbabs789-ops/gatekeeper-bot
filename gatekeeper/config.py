@@ -89,6 +89,10 @@ STRATEGY_DEFAULTS = {
     "TAKE_PROFIT_PCT": 0,           # sell everything once up this much (0 = off; half-at-2x rules apply instead)
     "RUG_RISK_MIN": 50,             # if the rug-risk score at entry is this high or more...
     "RUG_TP_PCT": 40,               # ...sell everything once up this much (0 = off). Quick profit, then leave
+    # --- rug-risk sizing: smaller bets on riskier coins, skip the worst ---
+    "RISK_SKIP": 60,                # don't buy if the rug-risk score is this high or more (100 = never skip)
+    "RISK_SIZING": 1,               # 1 = bet less on riskier coins (under 20%: full size, 20-35%: 75%, 35-50%: 50%, 50%+: 30%)
+    "STOP_CONFIRM_SEC": 0,          # stop loss only fires if price stays below it this long (0 = immediately)
     # --- survivor entries (ENTRY_MODE "survivor"): coins that lived through the dangerous hours ---
     "SURV_MIN_PCT": 5,              # price up at least this much over the last hour (a steady climb)
     "SURV_MAX_PCT": 40,             # ...but not more (not a spike)

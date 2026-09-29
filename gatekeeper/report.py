@@ -124,3 +124,51 @@ def status_text(con, strats=None):
     else:
         lines.append("No open paper trades.")
     return "\n".join(lines)
+
+
+def exits_text(con, days=3):
+    """What each exit rule did: how often the coin went on to rise after we sold (sold too early)
+    versus kept falling (the exit saved us). Plus the full-loss rugs and their rug-risk score at entry."""
+    import re
+    since = int(time.time() * 1000) - days * 86400000
+    rows = con.execute("SELECT * FROM trades WHERE mode='live' AND closed_at IS NOT NULL AND closed_at>=?", (since,)).fetchall()
+    if not rows:
+        return "No closed trades in the last %d days." % days
+    by = {}
+    rugs = []
+    for r in rows:
+        legs = json.loads(r["legs"] or "[]")
+        sells = [g for g in legs if g.get("side") == "sell" and g.get("spot")]
+        if not sells:
+            continue
+        reason = re.split(r" \(|:| ·", r["exit_reason"] or "?")[0].strip()
+        exit_px = sells[-1]["spot"]
+        after = con.execute("SELECT MAX(price) hi, MIN(price) lo FROM snapshots WHERE mint=? AND ts>? AND ts<=?",
+                            (r["mint"], r["closed_at"], r["closed_at"] + 3600000)).fetchone()
+        b = by.setdefault(reason, {"n": 0, "pnl": 0.0, "early": 0, "saved": 0, "known": 0})
+        b["n"] += 1
+        b["pnl"] += r["pnl_usd"] or 0
+        if after and after["hi"]:
+            b["known"] += 1
+            if after["hi"] >= exit_px * 1.2:
+                b["early"] += 1
+            if after["lo"] and after["lo"] <= exit_px * 0.8:
+                b["saved"] += 1
+        if (r["pnl_pct"] or 0) <= -70:
+            m = re.search(r"rug risk (\d+)%", r["why_entered"] or "")
+            rugs.append((r["symbol"], r["pnl_usd"] or 0, int(m.group(1)) if m else None, r["run_id"] or "main"))
+    L = ["🔍 <b>How the exits did</b> (last %d days)" % days,
+         "Per exit: trades · profit · coin rose 20%+ within 1h after we sold (too early) · fell another 20%+ (exit saved us)\n"]
+    for reason, b in sorted(by.items(), key=lambda kv: -kv[1]["n"]):
+        k = b["known"] or 1
+        L.append("<b>%s</b>: %d · %s · %.0f%% too early · %.0f%% saved us" % (
+            reason, b["n"], money(b["pnl"]), b["early"] / k * 100, b["saved"] / k * 100))
+    if rugs:
+        L.append("\n<b>Near-total losses (-70%% or worse)</b>: %d trades, %s" % (len(rugs), money(sum(x[1] for x in rugs))))
+        scored = [x for x in rugs if x[2] is not None]
+        if scored:
+            hi = sum(1 for x in scored if x[2] >= 50)
+            L.append("Rug risk at entry: %s · %d of %d were scored 50%%+" % (
+                ", ".join("$%s %d%%" % (x[0], x[2]) for x in scored[:8]), hi, len(scored)))
+    L.append("\nAn exit that's 'too early' far more often than it 'saved us' is the one to loosen.")
+    return "\n".join(L)

@@ -62,6 +62,8 @@ class Runner:
         self.sell_warned = {}
         risk.ensure(self.con)
         self.rug_model = risk.load(self.con)
+        for st in self.strats.values():
+            st.risk_model = self.rug_model or None
         self.epochs = {}
         for name, st in self.strats.items():
             self._epoch(name, st)
@@ -214,6 +216,8 @@ class Runner:
         if self.tick % 120 == 0:        # about hourly: relearn rug risk from finished coins
             try:
                 self.rug_model = await asyncio.to_thread(lambda: risk.build(db.connect()))
+                for st in self.strats.values():
+                    st.risk_model = self.rug_model
             except Exception:  # noqa: BLE001
                 log.exception("Rug model build failed")
         for name, st in self.strats.items():
@@ -311,9 +315,12 @@ class Runner:
         alert = name in config.ALERT_PRESETS
         tag = "" if name == "main" else "[%s] " % name.upper()
         if a["type"] == "buy":
-            pos.risk, pos.risk_how = self.rug_risk(pos.mint)
+            how = ("learned from %s coins" % format(self.rug_model.get("n", 0), ",")) if (self.rug_model or {}).get("counts") else "early estimate"
+            if pos.risk is None:
+                pos.risk, how = self.rug_risk(pos.mint)
             if pos.risk is not None:
-                pos.why = (pos.why + "; " if pos.why else "") + "rug risk %d%% (%s)" % (pos.risk, pos.risk_how)
+                pos.why = (pos.why + "; " if pos.why else "") + "rug risk %d%% (%s)%s" % (
+                    pos.risk, how, ", smaller bet: $%g" % pos.size_usd if pos.size_usd < self.strats[name].p["POSITION_USD"] else "")
             cur = self.con.execute(
                 "INSERT INTO trades(mode, run_id, mint, symbol, opened_at, entry_price, size_usd, qty, why_entered, legs) "
                 "VALUES('live',?,?,?,?,?,?,?,?,?)",
@@ -540,6 +547,8 @@ class Runner:
                 return n, coins, risk.build(c)
             n, coins, model = await asyncio.to_thread(work)
             self.rug_model = model
+            for st in self.strats.values():
+                st.risk_model = model
             db.kv_set(self.con, "rug_backfill_done", 1)
             await notify.send(self.session, "🧯 Rug-risk model trained on %s checkpoints from %s past coins (%s drained). Send /risk to see what it learned." % (
                 format(n, ","), format(coins, ","), format(model.get("rugs", 0), ",")))
@@ -611,6 +620,8 @@ class Runner:
                         asyncio.create_task(self.run_scan())
                     elif cmd in ("/traders", "traders", "/scorecard"):
                         await notify.send(self.session, fomo.scorecard_text(self.con))
+                    elif cmd in ("/exits", "exits"):
+                        await notify.send(self.session, report.exits_text(self.con))
                     elif cmd in ("/risk", "risk", "/rug"):
                         await notify.send(self.session, risk.report(self.con))
                     elif cmd in ("/research", "research"):
@@ -639,7 +650,7 @@ class Runner:
                             days = 7
                         asyncio.create_task(self.run_sweep(days))
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/risk: what the rug-risk model has learned")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us")
                     elif cmd.startswith("/"):
                         await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
             except Exception as e:  # noqa: BLE001

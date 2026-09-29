@@ -31,6 +31,7 @@ VARIANTS = [
     ("Current rules with zero trading costs (reference only)", {"FEE_PCT": 0, "PENALTY_PCT": 0, "PANIC_PENALTY_PCT": 0}),
     # --- in-trade protection, tested on newer coins (the old Wide entries, the biggest sample) ---
     ("New coins, old exits", {}, "wide"),
+    ("New coins + rug score", {}, "wide", True),
     ("New coins + lock gains (trail 20% once up 20%)", {"LOCK_START_PCT": 20, "LOCK_TRAIL_PCT": 20}, "wide"),
     ("New coins + lock gains (trail 15% once up 30%)", {"LOCK_START_PCT": 30, "LOCK_TRAIL_PCT": 15}, "wide"),
     ("New coins + never give back a 25% gain", {"BREAKEVEN_AT_PCT": 25}, "wide"),
@@ -46,6 +47,12 @@ VARIANTS = [
     ("Survivor, sell all at +20%", {"TAKE_PROFIT_PCT": 20}, "survivor"),
     ("Survivor, pool $50K+", {"MIN_LIQ_USD": 50000}, "survivor"),
     ("Survivor, 2h+ old instead of 4h+", {"MIN_AGE_MIN": 120}, "survivor"),
+    ("Survivor + rug score (skip 60%+, smaller bets on risky coins)", {}, "survivor", True),
+    ("Survivor + rug score, skip 40%+", {"RISK_SKIP": 40}, "survivor", True),
+    ("Survivor + rug score + stop waits 60s to confirm", {"STOP_CONFIRM_SEC": 60}, "survivor", True),
+    ("Survivor + rug score + wider stop (-25%)", {"STOP_LOSS_PCT": 25}, "survivor", True),
+    ("Survivor + rug score + no heavy-selling exit", {"SELL_PRESSURE_EXIT": 0}, "survivor", True),
+    ("Current Main + rug score", {}, "main", True),
     # --- momentum (day-trader style): buy breakouts, quick profits, tight stops ---
     ("Momentum (as set)", {}, "momentum"),
     ("Momentum, stronger breakouts only (+25% in 5 min)", {"MOM_MIN_PCT": 25}, "momentum"),
@@ -62,11 +69,20 @@ def run(days=7, progress=None):
     coins = {r["mint"]: dict(r) for r in con.execute("SELECT * FROM coins")}
     look = lambda m: safety.get(m)  # noqa: E731
     strats = []
+    from . import risk
+    model = risk.load(con) or None
     for v in VARIANTS:
-        label, ov, preset = v if len(v) == 3 else (v[0], v[1], "main")
+        label, ov = v[0], v[1]
+        preset = v[2] if len(v) > 2 else "main"
+        use_risk = len(v) > 3 and v[3]
         p = config.strategy_params(ov, preset)
         p["MAX_OPEN"] = 1000          # don't let open slots decide which trades a variant takes
-        strats.append((label, Strategy(p, look)))
+        st = Strategy(p, look)
+        if use_risk and model and model.get("counts"):
+            st.risk_model = model
+        elif use_risk:
+            label += " (no rug model yet)"
+        strats.append((label, st))
     since = int(time.time() * 1000) - days * 86400000
     lo_hi = con.execute("SELECT MIN(ts) a, MAX(ts) b FROM snapshots WHERE ts>=?", (since,)).fetchone()
     if not lo_hi["a"]:

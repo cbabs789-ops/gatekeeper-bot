@@ -3,6 +3,7 @@
 Pure logic, no network. The live runner and the backtester both feed it the
 same snapshot rows, so a backtest result is what the live bot would have done.
 """
+import math
 import re
 from collections import deque
 from dataclasses import dataclass, field
@@ -51,6 +52,8 @@ class CoinState:
     last_ts: int = 0
     last_price: float = 0.0
     last_liq: float = 0.0
+    socials: str = ""
+    last_snap: dict = None
 
     def at_or_after(self, ts):
         for t, pr, lq in self.hist:
@@ -77,7 +80,8 @@ class Position:
     trade_id: int = None
     max_liq: float = 0.0
     moon: bool = False
-    risk: float = None                 # rug-risk score at entry (0-100), set by the live runner
+    risk: float = None                 # rug-risk score at entry (0-100)
+    below_since: int = 0               # when price first fell below the stop (for STOP_CONFIRM_SEC)
 
 
 class Strategy:
@@ -89,6 +93,7 @@ class Strategy:
         self.positions = {}
         self.traded = set()
         self.closed = []                     # finished Position objects
+        self.risk_model = None               # rug-risk model (set by the runner and the rule test)
 
     # ---- feed
     def on_snapshot(self, s, coin):
@@ -105,6 +110,9 @@ class Strategy:
             self.coins[s["mint"]] = cs
         cs.hist.append((s["ts"], s["price"], s["liq"]))
         cs.last_ts, cs.last_price, cs.last_liq = s["ts"], s["price"], s["liq"]
+        cs.last_snap = s
+        if coin.get("socials") is not None:
+            cs.socials = coin.get("socials") or ""
         if s["price"] > cs.peak_price:
             cs.peak_price, cs.peak_ts = s["price"], s["ts"]
         acts = []
@@ -245,9 +253,12 @@ class Strategy:
             return None
         if self.safety_fails(mint, cs.last_liq):
             return None
-        usd = self.p["POSITION_USD"]
+        rk, usd = self.risk_and_size(cs)
+        if not usd:
+            return None
         qty, fill = self.broker.buy(cs.last_price, cs.last_liq, usd)
         pos = Position(mint, cs.symbol, cs.last_ts, fill, cs.last_price, usd, qty, qty, peak_after=cs.last_price, why=why)
+        pos.risk = rk
         pos.legs.append({"ts": cs.last_ts, "side": "buy", "spot": cs.last_price, "usd": usd})
         self.positions[mint] = pos
         self.traded.add(mint)
@@ -259,6 +270,20 @@ class Strategy:
         if not pos or not cs or not self.p.get("RECHECK_EXIT"):
             return []
         return self._close(pos, cs, max(ts, cs.last_ts), cs.last_price, cs.last_liq, "Safety changed: " + reason, panic=True)
+
+    def risk_and_size(self, cs):
+        """(rug-risk score or None, dollars to put in, or 0 to skip)."""
+        usd = self.p["POSITION_USD"]
+        if not self.risk_model or not cs.last_snap:
+            return None, usd
+        from . import risk
+        age = (cs.last_ts - cs.graduated_at) / MIN
+        r = risk.score(self.risk_model, risk.live_row(cs.last_snap, self.safety_lookup(cs.mint), cs.socials, age))[0]
+        if r >= self.p.get("RISK_SKIP", 100):
+            return r, 0
+        if self.p.get("RISK_SIZING"):
+            usd *= 1.0 if r < 20 else 0.75 if r < 35 else 0.5 if r < 50 else 0.3
+        return r, round(usd, 2)
 
     @staticmethod
     def leaders(pos):
@@ -281,9 +306,13 @@ class Strategy:
         ok, why, _ = self.entry_check(cs, s)
         if not ok:
             return None
-        usd = self.p["POSITION_USD"]
+        rk, usd = self.risk_and_size(cs)
+        if not usd:
+            self.traded.add(cs.mint)          # too risky: skip this coin for good
+            return None
         qty, fill = self.broker.buy(s["price"], s["liq"], usd)
         pos = Position(cs.mint, cs.symbol, s["ts"], fill, s["price"], usd, qty, qty, peak_after=s["price"], why="; ".join(why))
+        pos.risk = rk
         pos.legs.append({"ts": s["ts"], "side": "buy", "spot": s["price"], "usd": usd})
         self.positions[cs.mint] = pos
         self.traded.add(cs.mint)
@@ -293,9 +322,13 @@ class Strategy:
     def _manage(self, pos, cs, s):
         p, price, liq, ts = self.p, s["price"], s["liq"], s["ts"]
         pos.peak_after = max(pos.peak_after, price)
+        # A pool's dollar value falls on its own when the price falls (about with the square root of price).
+        # Only count it as liquidity being pulled when it fell MORE than the price move explains.
         ref = cs.at_or_after(ts - 5 * MIN)
-        if ref and ref[0] < ts and ref[2] > 0 and liq < ref[2] * (1 - p["LIQ_PULL_PCT"] / 100):
-            return self._close(pos, cs, ts, price, liq, "Liquidity pulled (-%.0f%% in 5 min)" % ((1 - liq / ref[2]) * 100), panic=True)
+        if ref and ref[0] < ts and ref[2] > 0 and ref[1] > 0 and price > 0:
+            depth_drop = 1 - (liq / math.sqrt(price)) / (ref[2] / math.sqrt(ref[1]))
+            if depth_drop > p["LIQ_PULL_PCT"] / 100:
+                return self._close(pos, cs, ts, price, liq, "Liquidity pulled (-%.0f%% of pool depth in 5 min)" % (depth_drop * 100), panic=True)
         gain = (price / pos.spot_at_entry - 1) * 100 if pos.spot_at_entry else 0
         if not pos.moon and p.get("RUG_TP_PCT") and pos.risk is not None and pos.risk >= p["RUG_RISK_MIN"] and gain >= p["RUG_TP_PCT"]:
             return self._close(pos, cs, ts, price, liq, "Quick profit: rug risk %.0f%%, took +%.0f%% and left" % (pos.risk, gain))
@@ -308,15 +341,23 @@ class Strategy:
                 return self._close(pos, cs, ts, price, liq, "Moonbag time limit (%.1fx)" % (price / pos.spot_at_entry))
             return []
         if price <= pos.spot_at_entry * (1 - p["STOP_LOSS_PCT"] / 100):
-            return self._close(pos, cs, ts, price, liq, "Stop loss")
+            wait = p.get("STOP_CONFIRM_SEC", 0) * 1000
+            if not pos.below_since:
+                pos.below_since = ts
+            # a brief wick below the stop gets a moment to recover; a real breakdown (or -50%) sells right away
+            if ts - pos.below_since >= wait or price <= pos.spot_at_entry * 0.5:
+                return self._close(pos, cs, ts, price, liq, "Stop loss")
+        else:
+            pos.below_since = 0
         if (ts - pos.opened_at) / MIN >= p["MAX_HOLD_MIN"]:
             return self._core_exit(pos, cs, ts, price, liq, "Time limit")
         # --- in-trade protection ---
         entry = pos.spot_at_entry
         best = pos.peak_after / entry - 1 if entry else 0
-        pos.max_liq = max(pos.max_liq, liq)
-        if p.get("LIQ_DRAIN_PCT") and pos.max_liq and liq < pos.max_liq * (1 - p["LIQ_DRAIN_PCT"] / 100):
-            return self._close(pos, cs, ts, price, liq, "Pool draining (-%.0f%% from its high)" % ((1 - liq / pos.max_liq) * 100), panic=True)
+        depth = liq / math.sqrt(price) if price > 0 else 0
+        pos.max_liq = max(pos.max_liq, depth)       # deepest the pool has been since entry (price-adjusted)
+        if p.get("LIQ_DRAIN_PCT") and pos.max_liq and depth < pos.max_liq * (1 - p["LIQ_DRAIN_PCT"] / 100):
+            return self._close(pos, cs, ts, price, liq, "Pool draining (-%.0f%% of its depth)" % ((1 - depth / pos.max_liq) * 100), panic=True)
         if (p.get("SELL_PRESSURE_EXIT") and (s.get("sells_m5") or 0) >= 15 and (s.get("sells_m5") or 0) >= 2 * (s.get("buys_m5") or 0)
                 and price < pos.peak_after * 0.9):
             return self._close(pos, cs, ts, price, liq, "Heavy selling (%s sells vs %s buys in 5 min)" % (s.get("sells_m5"), s.get("buys_m5")))
