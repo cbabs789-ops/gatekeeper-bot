@@ -14,7 +14,7 @@ from datetime import datetime
 
 import aiohttp
 
-from . import config, fomo, report, research, risk
+from . import config, db, fomo, report, research, risk
 
 log = logging.getLogger("gatekeeper.stats")
 API = "https://api.github.com/repos/{}/contents/{}"
@@ -32,8 +32,9 @@ def plain(t):
     return re.sub(r"<[^>]+>", "", t or "")
 
 
-def build(r):
-    con = r.con
+def build(r, con=None, trench_text=None):
+    """con: a database connection made in the calling thread (SQLite connections can't cross threads)."""
+    con = con or r.con
     now = datetime.now(report.TZ)
     parts = {}
 
@@ -51,7 +52,7 @@ def build(r):
     safe("moonshots", lambda: risk.moonshots_text(con))
     safe("traders", lambda: fomo.scorecard_text(con))
     safe("research", lambda: research.text(con))
-    safe("trench", lambda: r.trench.text())
+    safe("trench", lambda: trench_text if trench_text is not None else r.trench.text())
     tr = r.trends.state if getattr(r, "trends", None) else {}
     picks = "\n".join("$%s: %s" % (c["symbol"], " · ".join(c["reasons"])) for c in tr.get("suggestions", [])) or "none right now"
     parts["trends"] = "Hot words: %s\nPicks:\n%s" % (", ".join(tr.get("words", [])[:15]), picks)
@@ -95,7 +96,8 @@ async def put(session, path, text, message):
 
 
 async def publish(r):
-    data, md = await asyncio.to_thread(lambda: build(r))
+    tt = r.trench.text() if getattr(r, "trench", None) else ""
+    data, md = await asyncio.to_thread(lambda: build(r, db.connect(), tt))
     msg = "Stats %s" % data["generated_local"]
     await put(r.session, "latest.md", md, msg)
     await put(r.session, "latest.json", json.dumps(data, indent=1, default=str), msg)
