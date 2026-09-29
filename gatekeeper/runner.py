@@ -638,6 +638,8 @@ class Runner:
                                 L.append("\n<b>Trump's latest</b>: " + html.escape((st["trump"][0]["title"] or st["trump"][0]["text"])[:200]))
                             L.append("\nFull page with pictures and articles: /site → Trends tab")
                             await notify.send(self.session, "\n".join(L))
+                    elif cmd in ("/moonshots", "moonshots", "/50x"):
+                        await notify.send(self.session, await asyncio.to_thread(lambda: risk.moonshots_text(db.connect())))
                     elif cmd in ("/exits", "exits"):
                         await notify.send(self.session, report.exits_text(self.con))
                     elif cmd in ("/risk", "risk", "/rug"):
@@ -668,7 +670,7 @@ class Runner:
                             days = 7
                         asyncio.create_task(self.run_sweep(days))
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/moonshots: what coins that went 10x-50x looked like early")
                     elif cmd.startswith("/"):
                         await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
             except Exception as e:  # noqa: BLE001

@@ -11,6 +11,7 @@ vital sign drained, and combines those counts (naive Bayes) into one number:
 history it falls back to a rough rule-based estimate and says so.
 """
 import json
+from collections import Counter
 import math
 import time
 
@@ -310,4 +311,68 @@ def report(con):
         L.append(targets_text(con, m))
     except Exception:  # noqa: BLE001
         pass
+    return "\n".join(L)
+
+
+# ------------------------------------------------------------------ moonshots
+def moonshots(con, days=21, big=10.0):
+    """What coins that went 10x+ (and 50x+) looked like at each checkpoint, versus everything else.
+    Lift = how much more common a sign is among moonshots than among all coins (2.0 = twice as common)."""
+    ensure(con)
+    now = int(time.time() * 1000)
+    rows = [dict(r) for r in con.execute(
+        "SELECT f.*, c.symbol FROM coin_features f LEFT JOIN coins c ON c.mint=f.mint WHERE f.ts<? AND f.ts>?",
+        (now - LABEL_AFTER_MS, now - days * 86400000))]
+    if not rows:
+        return None
+    wins = [r for r in rows if (r["peak_x"] or 1) >= big]
+    huge = [r for r in rows if (r["peak_x"] or 1) >= 50]
+    out = {"n": len(rows), "wins": len(wins), "huge": len(huge), "by_age": {}, "lifts": [], "examples": []}
+    for cp in CHECKPOINTS:
+        a = [r for r in rows if r["t_min"] == cp]
+        w = [r for r in a if (r["peak_x"] or 1) >= big]
+        out["by_age"][cp] = (len(w), len(a))
+    if len(wins) >= 10:
+        allc, winc = Counter(), Counter()
+        for r in rows:
+            allc.update(features(r).values())
+        for r in wins:
+            winc.update(features(r).values())
+        for v, k in winc.items():
+            share_w, share_a = k / len(wins), allc[v] / len(rows)
+            if k >= 5 and share_a > 0 and share_a < 0.95 and share_w / share_a >= 1.2:
+                out["lifts"].append((share_w / share_a, v, k, allc[v]))
+        out["lifts"].sort(reverse=True)
+    best = {}
+    for r in wins:                                   # one line per coin: its earliest checkpoint's run
+        if r["mint"] not in best or r["t_min"] < best[r["mint"]]["t_min"]:
+            best[r["mint"]] = r
+    for r in sorted(best.values(), key=lambda r: -(r["peak_x"] or 0))[:10]:
+        out["examples"].append({"symbol": r.get("symbol") or r["mint"][:6], "mint": r["mint"], "t_min": r["t_min"],
+                                "x": round(r["peak_x"], 1), "mc": r["fdv"], "liq": r["liq"], "rugged": rugged(r)})
+    return out
+
+
+def moonshots_text(con, days=21):
+    m = moonshots(con, days)
+    if not m:
+        return "No finished coins yet."
+    L = ["🚀 <b>Moonshot study</b> (last %d days)" % days,
+         "Coins checked: %s · went 10x+ within 12h: %s · went 50x+: %s" % (format(m["n"], ","), m["wins"], m["huge"])]
+    L.append("\n<b>Chance of a 10x, by age when spotted</b>")
+    for cp, (w, a) in m["by_age"].items():
+        if a:
+            L.append("%d min old: %d of %s (%.1f%%)" % (cp, w, format(a, ","), w / a * 100))
+    if m["lifts"]:
+        L.append("\n<b>What moonshots looked like early</b> (how much more common than in all coins)")
+        for lift, v, k, tot in m["lifts"][:10]:
+            L.append("%s: %.1fx more common (%d of the moonshots)" % (v[0].upper() + v[1:], lift, k))
+    else:
+        L.append("\nNeed 10+ moonshots before comparing their early signs.")
+    if m["examples"]:
+        L.append("\n<b>Biggest runs</b>")
+        for e in m["examples"]:
+            L.append("$%s: %gx from %s min old (MC then %s)%s" % (e["symbol"], e["x"], e["t_min"],
+                     ("$%.0fK" % (e["mc"] / 1000)) if e["mc"] else "?", " · then rugged" if e["rugged"] else ""))
+    L.append("\nMoonshots are rare, so the aim is to spot their early signs, not to chase every pump.")
     return "\n".join(L)

@@ -48,6 +48,8 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 
 28. **Trends.** Every 5 minutes the bot pulls Trump's Truth Social posts (trumpstruth.org's public feed), Google News top stories and crypto/meme-coin searches, DexScreener's new coin profiles and boosts, and what Fomo traders piled into over the last 3 hours. It finds the words trending in the news, matches them to coin names, safety-checks the candidates, scores their rug risk, and picks a few worth a look. Dashboard Trends tab (pictures, links, headlines, posts), `/trends` in Telegram, a 📣 alert when Trump posts (with any matching coins), and a 📰 alert for strong picks. The bot's picks are graded 1h, 6h and 24h later like a trader in the scorecard.
 
+29. **Moonshot study.** `/moonshots` compares coins that went 10x and 50x+ within 12 hours against everything else, using the vital signs logged at 30 to 240 minutes old: the chance of a 10x by age, which early signs were more common among moonshots, and the biggest runs (and whether they rugged afterward).
+
 ## Install (fresh Ubuntu server, as root)
 
 ```
