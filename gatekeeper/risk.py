@@ -191,7 +191,8 @@ def build(con, days=21):
         # the profit target that paid best for each rug-risk band (needs 100+ coins in the band)
         model["targets"] = {}
         for label, n, hit, drained, best in targets(con, model):
-            if best and n >= 100:
+            # only use a data target when it actually made money; a "least bad" losing target is worse than trailing
+            if best and n >= 100 and best[1] > 0:
                 model["targets"][label] = best[0]
     db.kv_set(con, "rug_model", json.dumps(model))
     return model

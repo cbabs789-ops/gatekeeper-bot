@@ -145,7 +145,13 @@ def exits_text(con, days=3):
         exit_px = sells[-1]["spot"]
         after = con.execute("SELECT MAX(price) hi, MIN(price) lo FROM snapshots WHERE mint=? AND ts>? AND ts<=?",
                             (r["mint"], r["closed_at"], r["closed_at"] + 3600000)).fetchone()
-        b = by.setdefault(reason, {"n": 0, "pnl": 0.0, "early": 0, "saved": 0, "known": 0})
+        later = con.execute("SELECT price FROM snapshots WHERE mint=? AND ts>=? ORDER BY ts LIMIT 1",
+                            (r["mint"], r["closed_at"] + 3600000)).fetchone()
+        b = by.setdefault(reason, {"n": 0, "pnl": 0.0, "early": 0, "saved": 0, "known": 0, "h1": []})
+        if later and later["price"]:
+            b["h1"].append((later["price"] / exit_px - 1) * 100)
+        elif (r["exit_reason"] or "").startswith(("Liquidity", "Pool", "No data")):
+            b["h1"].append(-100.0)          # coin stopped trading: it went to zero
         b["n"] += 1
         b["pnl"] += r["pnl_usd"] or 0
         if after and after["hi"]:
@@ -161,8 +167,12 @@ def exits_text(con, days=3):
          "Per exit: trades · profit · coin rose 20%+ within 1h after we sold (too early) · fell another 20%+ (exit saved us)\n"]
     for reason, b in sorted(by.items(), key=lambda kv: -kv[1]["n"]):
         k = b["known"] or 1
-        L.append("<b>%s</b>: %d · %s · %.0f%% too early · %.0f%% saved us" % (
-            reason, b["n"], money(b["pnl"]), b["early"] / k * 100, b["saved"] / k * 100))
+        h1 = sorted(b["h1"])
+        med = h1[len(h1) // 2] if h1 else None
+        verdict = "" if med is None else (" · 1h later: typical coin %+.0f%% vs our sale → %s" % (
+            med, "sold too early" if med > 10 else "exit helped" if med < -10 else "about even"))
+        L.append("<b>%s</b>: %d · %s · %.0f%% too early · %.0f%% saved us%s" % (
+            reason, b["n"], money(b["pnl"]), b["early"] / k * 100, b["saved"] / k * 100, verdict))
     if rugs:
         L.append("\n<b>Near-total losses (-70%% or worse)</b>: %d trades, %s" % (len(rugs), money(sum(x[1] for x in rugs))))
         scored = [x for x in rugs if x[2] is not None]
