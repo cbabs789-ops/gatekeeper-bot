@@ -118,6 +118,8 @@ class Runner:
             pos.peak_after = cs.peak_price if cs else pos.spot_at_entry
             m = re.search(r"rug risk (\d+)%", pos.why or "")
             pos.risk = float(m.group(1)) if m else None
+            m = re.search(r"data target ([\d.]+)x", pos.why or "")
+            pos.target_x = float(m.group(1)) if m else None
             strat.positions[r["mint"]] = pos
         log.info("[%s] restored %d coins, %d open positions", name, len(strat.coins), len(strat.positions))
 
@@ -319,8 +321,9 @@ class Runner:
             if pos.risk is None:
                 pos.risk, how = self.rug_risk(pos.mint)
             if pos.risk is not None:
-                pos.why = (pos.why + "; " if pos.why else "") + "rug risk %d%% (%s)%s" % (
-                    pos.risk, how, ", smaller bet: $%g" % pos.size_usd if pos.size_usd < self.strats[name].p["POSITION_USD"] else "")
+                pos.why = (pos.why + "; " if pos.why else "") + "rug risk %d%% (%s)%s%s" % (
+                    pos.risk, how, ", smaller bet: $%g" % pos.size_usd if pos.size_usd < self.strats[name].p["POSITION_USD"] else "",
+                    ", data target %gx" % pos.target_x if pos.target_x else "")
             cur = self.con.execute(
                 "INSERT INTO trades(mode, run_id, mint, symbol, opened_at, entry_price, size_usd, qty, why_entered, legs) "
                 "VALUES('live',?,?,?,?,?,?,?,?,?)",

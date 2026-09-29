@@ -44,6 +44,8 @@ A paper-trading bot for newly graduated Solana meme coins. It trades fake money 
 
 26. **Smarter exits and rug sizing.** Liquidity exits now compare the pool's depth to what the price move explains (a pool's dollar value shrinks on its own when price dips), so normal dips no longer trigger "liquidity pulled" or "pool draining"; only real removals do. Every buy is scored for rug risk first: 60%+ is skipped (`RISK_SKIP`), and riskier coins get smaller bets (`RISK_SIZING`: full size under 20%, then 75%, 50%, 30%). `STOP_CONFIRM_SEC` lets a stop ride out a brief wick. `/exits` shows, for each exit rule, how often the coin went on to rise after the bot sold versus kept falling.
 
+27. **Data-picked profit targets.** Every hour the bot works out, for each rug-risk band, which profit target (1.2x to 8x) would have made the most across the coins it tracked, counting rugs and stop-outs. Each new trade gets the target for its band ("data target 1.4x"). Turn off with `ADAPTIVE_TARGETS=0`. The bot also now records each coin's lowest point after each checkpoint, so stop levels can be picked from data next.
+
 ## Install (fresh Ubuntu server, as root)
 
 ```

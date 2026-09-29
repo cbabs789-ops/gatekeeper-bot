@@ -82,6 +82,7 @@ class Position:
     moon: bool = False
     risk: float = None                 # rug-risk score at entry (0-100)
     below_since: int = 0               # when price first fell below the stop (for STOP_CONFIRM_SEC)
+    target_x: float = None             # data-picked profit target for this trade (ADAPTIVE_TARGETS)
 
 
 class Strategy:
@@ -259,6 +260,7 @@ class Strategy:
         qty, fill = self.broker.buy(cs.last_price, cs.last_liq, usd)
         pos = Position(mint, cs.symbol, cs.last_ts, fill, cs.last_price, usd, qty, qty, peak_after=cs.last_price, why=why)
         pos.risk = rk
+        pos.target_x = self._target(rk)
         pos.legs.append({"ts": cs.last_ts, "side": "buy", "spot": cs.last_price, "usd": usd})
         self.positions[mint] = pos
         self.traded.add(mint)
@@ -284,6 +286,12 @@ class Strategy:
         if self.p.get("RISK_SIZING"):
             usd *= 1.0 if r < 20 else 0.75 if r < 35 else 0.5 if r < 50 else 0.3
         return r, round(usd, 2)
+
+    def _target(self, rk):
+        if rk is None or not self.p.get("ADAPTIVE_TARGETS") or not self.risk_model:
+            return None
+        from . import risk
+        return risk.target_for(self.risk_model, rk)
 
     @staticmethod
     def leaders(pos):
@@ -313,6 +321,7 @@ class Strategy:
         qty, fill = self.broker.buy(s["price"], s["liq"], usd)
         pos = Position(cs.mint, cs.symbol, s["ts"], fill, s["price"], usd, qty, qty, peak_after=s["price"], why="; ".join(why))
         pos.risk = rk
+        pos.target_x = self._target(rk)
         pos.legs.append({"ts": s["ts"], "side": "buy", "spot": s["price"], "usd": usd})
         self.positions[cs.mint] = pos
         self.traded.add(cs.mint)
@@ -330,7 +339,9 @@ class Strategy:
             if depth_drop > p["LIQ_PULL_PCT"] / 100:
                 return self._close(pos, cs, ts, price, liq, "Liquidity pulled (-%.0f%% of pool depth in 5 min)" % (depth_drop * 100), panic=True)
         gain = (price / pos.spot_at_entry - 1) * 100 if pos.spot_at_entry else 0
-        if not pos.moon and p.get("RUG_TP_PCT") and pos.risk is not None and pos.risk >= p["RUG_RISK_MIN"] and gain >= p["RUG_TP_PCT"]:
+        if not pos.moon and pos.target_x and price >= pos.spot_at_entry * pos.target_x:
+            return self._core_exit(pos, cs, ts, price, liq, "Hit data target %gx (rug risk %.0f%%)" % (pos.target_x, pos.risk or 0))
+        if not pos.moon and not pos.target_x and p.get("RUG_TP_PCT") and pos.risk is not None and pos.risk >= p["RUG_RISK_MIN"] and gain >= p["RUG_TP_PCT"]:
             return self._close(pos, cs, ts, price, liq, "Quick profit: rug risk %.0f%%, took +%.0f%% and left" % (pos.risk, gain))
         if not pos.moon and p.get("TAKE_PROFIT_PCT") and gain >= p["TAKE_PROFIT_PCT"]:
             return self._close(pos, cs, ts, price, liq, "Took profit (+%.0f%%)" % gain)

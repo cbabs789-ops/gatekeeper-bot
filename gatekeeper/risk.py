@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS coin_features (
   buys5 INTEGER, sells5 INTEGER, buys1h INTEGER, sells1h INTEGER, vol1h REAL, pc1h REAL,
   top10 REAL, insiders INTEGER, lp_ok INTEGER, auth_ok INTEGER, danger INTEGER,
   socials TEXT, dev_prev INTEGER, dev_dead INTEGER,
-  peak_x REAL DEFAULT 1, min_liq_frac REAL DEFAULT 1, dead INTEGER DEFAULT 0,
+  peak_x REAL DEFAULT 1, min_liq_frac REAL DEFAULT 1, dead INTEGER DEFAULT 0, min_x REAL DEFAULT 1,
   PRIMARY KEY (mint, t_min)
 );
 CREATE INDEX IF NOT EXISTS feat_ts ON coin_features(ts);
@@ -36,6 +36,10 @@ CREATE INDEX IF NOT EXISTS feat_ts ON coin_features(ts);
 
 def ensure(con):
     con.executescript(SCHEMA)
+    try:
+        con.execute("ALTER TABLE coin_features ADD COLUMN min_x REAL DEFAULT 1")
+    except Exception:  # noqa: BLE001
+        pass  # already there
 
 
 # ------------------------------------------------------------------ features
@@ -111,8 +115,9 @@ def log(con, mint, snap, saf, socials, age_min, now):
 def update_outcomes(con, snaps, now):
     """snaps: {mint: (price, liq)} from this price check. Tracks best price and smallest pool after each checkpoint."""
     rows = [(p, l, m, now - LABEL_AFTER_MS) for m, (p, l) in snaps.items() if p and l is not None]
-    con.executemany("UPDATE coin_features SET peak_x=MAX(peak_x, ?/price), min_liq_frac=MIN(min_liq_frac, ?/liq) "
-                    "WHERE mint=? AND ts>? AND price>0 AND liq>0", rows)
+    rows = [(p, p, l, m, t) for p, l, m, t in rows]
+    con.executemany("UPDATE coin_features SET peak_x=MAX(peak_x, ?/price), min_x=MIN(COALESCE(min_x,1), ?/price), "
+                    "min_liq_frac=MIN(min_liq_frac, ?/liq) WHERE mint=? AND ts>? AND price>0 AND liq>0", rows)
 
 
 def mark_dead(con, mint, now):
@@ -183,8 +188,22 @@ def build(con, days=21):
                 c = counts.setdefault(k, {}).setdefault(v, {"r": 0, "s": 0})
                 c[y] += 1
         model["counts"] = counts
+        # the profit target that paid best for each rug-risk band (needs 100+ coins in the band)
+        model["targets"] = {}
+        for label, n, hit, drained, best in targets(con, model):
+            if best and n >= 100:
+                model["targets"][label] = best[0]
     db.kv_set(con, "rug_model", json.dumps(model))
     return model
+
+
+def target_for(model, r):
+    """Data-picked profit target (as a multiple, e.g. 1.4) for a rug-risk score, or None."""
+    t = (model or {}).get("targets") or {}
+    for lo, hi, label in RISK_BANDS:
+        if lo <= r < hi:
+            return t.get(label)
+    return None
 
 
 def load(con):

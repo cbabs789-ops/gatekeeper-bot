@@ -92,6 +92,7 @@ STRATEGY_DEFAULTS = {
     # --- rug-risk sizing: smaller bets on riskier coins, skip the worst ---
     "RISK_SKIP": 60,                # don't buy if the rug-risk score is this high or more (100 = never skip)
     "RISK_SIZING": 1,               # 1 = bet less on riskier coins (under 20%: full size, 20-35%: 75%, 35-50%: 50%, 50%+: 30%)
+    "ADAPTIVE_TARGETS": 1,          # 1 = profit target per trade picked from data for its rug-risk level (updates hourly)
     "STOP_CONFIRM_SEC": 0,          # stop loss only fires if price stays below it this long (0 = immediately)
     # --- survivor entries (ENTRY_MODE "survivor"): coins that lived through the dangerous hours ---
     "SURV_MIN_PCT": 5,              # price up at least this much over the last hour (a steady climb)
