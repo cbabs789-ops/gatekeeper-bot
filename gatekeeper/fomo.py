@@ -385,6 +385,10 @@ class Feed:
     async def handle(self, m):
         if m.get("type") != "alert" or m.get("alertType") not in ("buy", "sell"):
             return
+        # the feed sometimes reports impossible dollar amounts (mispriced tokens); treat those as $0
+        cap = float(config.os.environ.get("GK_FOMO_MAX_TRADE_USD", "250000"))
+        if (_num(m.get("usdValue")) or 0) > cap:
+            m = dict(m, usdValue=0, badUsd=m.get("usdValue"))
         now = int(m.get("ts") or time.time() * 1000)
         addr = m.get("tokenAddress") or m.get("token") or ""
         self.con.execute("INSERT INTO fomo_events VALUES(?,?,?,?,?,?,?,?)",
@@ -454,7 +458,8 @@ def feed_report(con, hours=24):
     """Free report built only from the live feed we've stored."""
     ensure_schema(con)
     since = int(time.time() * 1000) - hours * 3600 * 1000
-    rows = con.execute("SELECT trader, side, token, token_address, chain, usd FROM fomo_events WHERE ts>=?", (since,)).fetchall()
+    cap = float(config.os.environ.get("GK_FOMO_MAX_TRADE_USD", "250000"))
+    rows = con.execute("SELECT trader, side, token, token_address, chain, usd FROM fomo_events WHERE ts>=? AND usd<=?", (since, cap)).fetchall()
     if not rows:
         return "No Fomo feed activity recorded in the last %dh yet." % hours
     watch = {h.lower() for h in watchlist()}
