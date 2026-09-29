@@ -276,7 +276,27 @@ def make_app(runner):
             st["picks_record"] = [dict(r) for r in rows]
         return web.json_response(st, headers={"Cache-Control": "no-store"})
 
-    app = web.Application()
+    async def trench_api(req):
+        if not authed(req):
+            return web.json_response({"error": "forbidden"}, status=403)
+        tr = getattr(runner, "trench", None)
+        return web.json_response(tr.state() if tr else {}, headers={"Cache-Control": "no-store"})
+
+    async def hook(req):
+        """Helius pushes our trench wallets' trades here."""
+        tr = getattr(runner, "trench", None)
+        if not tr or not hmac.compare_digest(req.match_info.get("secret", ""), tr.hook_secret()):
+            return web.Response(status=403)
+        try:
+            data = await req.json()
+            asyncio.create_task(tr.on_txs(data if isinstance(data, list) else [data]))
+        except Exception:  # noqa: BLE001
+            log.exception("webhook")
+        return web.Response(text="ok")
+
+    app = web.Application(client_max_size=4 * 1024 * 1024)
+    app.router.add_get("/api/trench", trench_api)
+    app.router.add_post("/hook/{secret}", hook)
     app.router.add_get("/api/trends", trends_api)
     app.router.add_get("/api/chart", chart)
     app.router.add_get("/", page)
@@ -355,7 +375,14 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 @keyframes pop{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 </style></head><body><div class="wrap">
 <header><h1>🤖 Gatekeeper Live</h1><span class="pill" id="health">connecting…</span></header>
-<nav class="tabs"><button id="tb-trading" class="on" onclick="tab('trading')">📈 Trading</button><button id="tb-trends" onclick="tab('trends')">📰 Trends</button></nav>
+<nav class="tabs"><button id="tb-trading" class="on" onclick="tab('trading')">📈 Trading</button><button id="tb-trends" onclick="tab('trends')">📰 Trends</button><button id="tb-trench" onclick="tab('trench')">⛏️ Trench</button></nav>
+<div id="tab-trench" hidden>
+<p class="dim" id="tn-upd">Loading…</p>
+<h2>Coins trench wallets are buying (24h)</h2><div class="list" id="tn-hot"></div>
+<h2>Live trades</h2><div class="list" id="tn-feed"></div>
+<h2>Trench wallets <span class="dim" style="text-transform:none;letter-spacing:0">(early in 2+ moonshots)</span></h2><div class="list" id="tn-wallets"></div>
+<h2>Moonshots studied</h2><div class="list" id="tn-moons"></div>
+</div>
 <div id="tab-trends" hidden>
 <p class="dim" id="tr-upd">Loading trends…</p>
 <h2>Worth a look <span class="dim" style="text-transform:none;letter-spacing:0">(the bot's picks, not buy signals)</span></h2><div class="cards" id="tr-sugg"></div>
@@ -470,8 +497,20 @@ async function load(){try{const r=await fetch("api/state?k="+encodeURIComponent(
  catch(e){$("health").replaceChildren(el("span","dot bad"),document.createTextNode("Can't reach the bot ("+e.message+"). Retrying…"))}}
 load();setInterval(load,5000);
 let TAB="trading";
-function tab(t){TAB=t;$("tab-trading").hidden=t!=="trading";$("tab-trends").hidden=t!=="trends";$("tb-trading").classList.toggle("on",t==="trading");$("tb-trends").classList.toggle("on",t==="trends");
- try{localStorage.setItem("gk_tab",t)}catch(_){ }if(t==="trends")loadTrends()}
+function tab(t){TAB=t;["trading","trends","trench"].forEach(x=>{$("tab-"+x).hidden=t!==x;$("tb-"+x).classList.toggle("on",t===x)});
+ try{localStorage.setItem("gk_tab",t)}catch(_){ }if(t==="trends")loadTrends();if(t==="trench")loadTrench()}
+const sw=w=>w.slice(0,4)+"…"+w.slice(-4);
+async function loadTrench(){try{const r=await fetch("api/trench?k="+encodeURIComponent(K),{cache:"no-store"});renderTrench(await r.json())}catch(e){$("tn-upd").textContent="Couldn't load ("+e.message+")"}}
+function renderTrench(s){if(!s.has_key){$("tn-upd").textContent="Needs a Helius key (HELIUS_API_KEY).";return}
+ $("tn-upd").textContent="Coins studied: "+s.examined+" ("+s.moonshots+" moonshots) · Helius credits today: "+s.credits_today.toLocaleString()+" of "+s.credit_cap.toLocaleString()+" · discovery runs every 6h";
+ const empty=t=>[el("div","empty",t)];const fl=(m,sym)=>link("$"+(sym||m.slice(0,6)),"https://fomo.family/tokens/solana/"+m);
+ $("tn-hot").replaceChildren(...(s.hot.length?s.hot.map(h=>{const d=el("div","item");const w=el("div");w.append(fl(h.mint,h.symbol));d.append(w,el("b",h.n>=2?"up":"",h.n+" wallet"+(h.n>1?"s":"")));d.append(el("div","sub",(h.sol_in||0).toFixed(2)+" SOL in · last buy "+ago(h.last)));return d}):empty("No trench buys yet.")));
+ $("tn-feed").replaceChildren(...(s.feed.length?s.feed.map(e=>{const d=el("div","item");const w=el("div");w.append(document.createTextNode(e.side==="buy"?"🟢 ":"🔴 "),fl(e.mint,e.symbol));d.append(w,el("span","dim",(e.sol||0).toFixed(2)+" SOL"));const sub=el("div","sub");sub.append(link(sw(e.wallet),"https://solscan.io/account/"+e.wallet),document.createTextNode(" · "+ago(e.ts)));d.append(sub);return d}):empty("Waiting for their next trade.")));
+ $("tn-wallets").replaceChildren(...(s.wallets.length?s.wallets.map(w=>{const d=el("div","item");const a=el("div");a.append(el("b",null,"#"+w.rank+" "),link(sw(w.wallet),"https://solscan.io/account/"+w.wallet));
+  d.append(a,el("b","up",w.hits+" moonshots"));d.append(el("div","sub","early in "+w.hits+" of "+w.seen+" coins studied ("+w.hit_rate+"%) · avg "+w.avg_x+"x · best "+w.best_x+"x"+(w.live_med6h!=null?" · live buys: "+w.live_buys+", 6h median "+pct(w.live_med6h):"")));
+  d.append(el("div","sub","e.g. "+(w.examples||"")));return d}):empty("None yet. The first discovery runs about 2 minutes after the bot starts, then every 6 hours.")));
+ $("tn-moons").replaceChildren(...(s.moons.length?s.moons.map(m=>{const d=el("div","item");const w=el("div");w.append(fl(m.mint,m.symbol));d.append(w,el("b","up",m.peak_x+"x"));d.append(el("div","sub",(m.buyers>=0?m.buyers+" early buyers read":"history too long to read")));return d}):empty("None studied yet.")))}
+setInterval(()=>{if(TAB==="trench")loadTrench()},30000);
 const ago=ms=>{const m=Math.round((Date.now()-ms)/60000);return m<60?m+"m ago":m<1440?Math.round(m/60)+"h ago":Math.round(m/1440)+"d ago"};
 const km2=v=>v==null?"n/a":v>=1e9?"$"+(v/1e9).toFixed(2)+"B":v>=1e6?"$"+(v/1e6).toFixed(2)+"M":v>=1e3?"$"+(v/1e3).toFixed(0)+"K":"$"+Math.round(v);
 function coinCard(c,extra){const d=el("div","coin");if(c.header){const h=el("div","hdr");h.style.backgroundImage="url('"+encodeURI(c.header)+"')";d.append(h)}
@@ -497,7 +536,7 @@ function renderTrends(s){if(!s.updated){$("tr-upd").textContent="Trends are stil
  const rec=(s.picks_record||[]);const pc=(a,b)=>b==null||b<0||!a?"…":pct((b/a-1)*100);
  $("tr-record").replaceChildren(...(rec.length?rec.map(r=>{const d=el("div","item");d.append(el("b",null,"$"+r.symbol),el("span","dim","1h "+pc(r.p0,r.p1h)+" · 6h "+pc(r.p0,r.p6h)+" · 24h "+pc(r.p0,r.p24h)));return d}):empty("No picks graded yet. Each pick is checked 1h, 6h and 24h later.")))}
 setInterval(()=>{if(TAB==="trends")loadTrends()},60000);
-try{if(localStorage.getItem("gk_tab")==="trends")tab("trends")}catch(_){ }
+try{const t=localStorage.getItem("gk_tab");if(t==="trends"||t==="trench")tab(t)}catch(_){ }
 function toast(e){const t=el("div","toast "+e.type);const n=NAMES[e.strategy]||e.strategy;
  t.textContent=e.type==="buy"?"🟢 "+n+" bought $"+e.symbol+" · "+money(e.usd):e.type==="partial"?((e.reason||"").includes("moonbag")?"🌙 "+n+" took profit on $"+e.symbol+", kept a moonbag · ":"🟡 "+n+" sold half of $"+e.symbol+" · ")+money(e.usd):
   "🔴 "+n+" sold $"+e.symbol+" · "+(e.pnl!=null?sgn(e.pnl):"")+(e.reason?" · "+e.reason:"");
