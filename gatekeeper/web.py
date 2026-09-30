@@ -276,6 +276,8 @@ def make_app(runner):
             # how the bot's own picks have done so far (graded like a trader in the scorecard)
             rows = runner.con.execute("SELECT symbol, p0, p1h, p6h, p24h FROM trader_calls WHERE trader='gatekeeper-picks' AND p0>0 ORDER BY ts DESC LIMIT 30").fetchall()
             st["picks_record"] = [dict(r) for r in rows]
+            rows = runner.con.execute("SELECT symbol, p0, p1h, p6h, p24h FROM trader_calls WHERE trader='gatekeeper-events' AND p0>0 ORDER BY ts DESC LIMIT 30").fetchall()
+            st["events_record"] = [dict(r) for r in rows]
         return web.json_response(st, headers={"Cache-Control": "no-store"})
 
     async def trench_api(req):
@@ -377,7 +379,12 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 @keyframes pop{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 </style></head><body><div class="wrap">
 <header><h1>🤖 Gatekeeper Live</h1><span class="pill" id="health">connecting…</span></header>
-<nav class="tabs"><button id="tb-trading" class="on" onclick="tab('trading')">📈 Trading</button><button id="tb-trends" onclick="tab('trends')">📰 Trends</button><button id="tb-trench" onclick="tab('trench')">⛏️ Trench</button></nav>
+<nav class="tabs"><button id="tb-trading" class="on" onclick="tab('trading')">📈 Trading</button><button id="tb-trends" onclick="tab('trends')">📰 Trends</button><button id="tb-events" onclick="tab('events')">🗓️ Events</button><button id="tb-trench" onclick="tab('trench')">⛏️ Trench</button></nav>
+<div id="tab-events" hidden>
+<p class="dim">Speeches, summits, signings and announcements found in the news before they happen, with the coins most likely to move. Checked every 30 minutes. Ideas to watch, not buy signals: news coins often pump before the event and dump right after.</p>
+<h2>Upcoming events</h2><div id="tr-events"><div class="empty">Loading…</div></div>
+<h2>How event picks did <span class="dim" style="text-transform:none;letter-spacing:0">(checked 1h, 6h and 24h after event day starts)</span></h2><div class="list" id="ev-record"></div>
+</div>
 <div id="tab-trench" hidden>
 <p class="dim" id="tn-upd">Loading…</p>
 <h2>Coins trench wallets are buying (24h)</h2><div class="list" id="tn-hot"></div>
@@ -387,7 +394,6 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 </div>
 <div id="tab-trends" hidden>
 <p class="dim" id="tr-upd">Loading trends…</p>
-<h2>Upcoming events <span class="dim" style="text-transform:none;letter-spacing:0">(speeches, summits, signings, and coins that could move)</span></h2><div id="tr-events"></div>
 <h2>Worth a look <span class="dim" style="text-transform:none;letter-spacing:0">(the bot's picks, not buy signals)</span></h2><div class="cards" id="tr-sugg"></div>
 <h2>Trump's latest posts</h2><div class="list" id="tr-trump"></div>
 <h2>Coins riding the news</h2><div class="cards" id="tr-match"></div>
@@ -500,8 +506,8 @@ async function load(){try{const r=await fetch("api/state?k="+encodeURIComponent(
  catch(e){$("health").replaceChildren(el("span","dot bad"),document.createTextNode("Can't reach the bot ("+e.message+"). Retrying…"))}}
 load();setInterval(load,5000);
 let TAB="trading";
-function tab(t){TAB=t;["trading","trends","trench"].forEach(x=>{$("tab-"+x).hidden=t!==x;$("tb-"+x).classList.toggle("on",t===x)});
- try{localStorage.setItem("gk_tab",t)}catch(_){ }if(t==="trends")loadTrends();if(t==="trench")loadTrench()}
+function tab(t){TAB=t;["trading","trends","events","trench"].forEach(x=>{$("tab-"+x).hidden=t!==x;$("tb-"+x).classList.toggle("on",t===x)});
+ try{localStorage.setItem("gk_tab",t)}catch(_){ }if(t==="trends"||t==="events")loadTrends();if(t==="trench")loadTrench()}
 const sw=w=>w.slice(0,4)+"…"+w.slice(-4);
 async function loadTrench(){try{const r=await fetch("api/trench?k="+encodeURIComponent(K),{cache:"no-store"});renderTrench(await r.json())}catch(e){$("tn-upd").textContent="Couldn't load ("+e.message+")"}}
 function renderTrench(s){if(!s.has_key){$("tn-upd").textContent="Needs a Helius key (HELIUS_API_KEY).";return}
@@ -528,19 +534,21 @@ function coinCard(c,extra){const d=el("div","coin");if(c.header){const h=el("div
 async function loadTrends(){try{const r=await fetch("api/trends?k="+encodeURIComponent(K),{cache:"no-store"});const s=await r.json();renderTrends(s)}catch(e){$("tr-upd").textContent="Couldn't load trends ("+e.message+")"}}
 function renderTrends(s){if(!s.updated){$("tr-upd").textContent="Trends are still loading (first update takes a few minutes after the bot starts).";return}
  $("tr-upd").textContent="Updated "+ago(s.updated)+" · refreshes every 2 minutes · picks are ideas to check, not buy signals";
- const empty=t=>[el("div","empty",t)];
+ const empty=t=>[el("div","empty",t)];const pc=(a,b)=>b==null||b<0||!a?"…":pct((b/a-1)*100);
  $("tr-sugg").replaceChildren(...(s.suggestions.length?s.suggestions.map(c=>{const w=el("div","why");w.textContent="Why: "+c.reasons.join(" · ");return coinCard(c,w)}):empty("Nothing strong enough right now.")));
  $("tr-events").replaceChildren(...((s.events||[]).length?s.events.map(e=>{const box=el("div","post");const h=el("div");const b=el("b",null,e.when_text+": ");h.append(b);h.append(link(e.title,e.link));box.append(h);box.append(el("div","dim","topic: "+e.words.slice(0,4).join(", ")+(e.source?" · "+e.source:"")));const cs=el("div","cards");(e.coins||[]).forEach(c=>cs.append(coinCard(c)));if(!(e.coins||[]).length)cs.append(el("div","empty","No coins with a real pool for this yet."));box.append(cs);return box}):empty("No scheduled events found right now. Checked every 30 minutes.")));
+ const erec=(s.events_record||[]);
+ $("ev-record").replaceChildren(...(erec.length?erec.map(r=>{const d=el("div","item");d.append(el("b",null,"$"+r.symbol),el("span","dim","1h "+pc(r.p0,r.p1h)+" · 6h "+pc(r.p0,r.p6h)+" · 24h "+pc(r.p0,r.p24h)));return d}):empty("No event picks graded yet. Coins are graded starting on the day of each event.")));
  $("tr-trump").replaceChildren(...(s.trump.length?s.trump.map(p=>{const d=el("div","post");const txt=(p.title&&!p.title.startsWith("http"))?p.title:p.text;d.append(el("div",null,txt));const m=el("div","dim");m.style.fontSize="12px";m.style.marginTop="4px";m.append(document.createTextNode(ago(p.ts)+" · "));m.append(link("open post",p.link));d.append(m);return d}):empty("No posts loaded.")));
  $("tr-match").replaceChildren(...(s.matches.length?s.matches.map(c=>{const w=el("div","why");w.append(document.createTextNode("Matches: "+c.words.join(", ")));(c.headlines||[]).forEach(h=>{const x=el("div","dim");x.style.fontSize="12px";x.append(link(h.title,h.link));w.append(x)});return coinCard(c,w)}):empty("No coins matching today's news yet.")));
  $("tr-hot").replaceChildren(...(s.hot.length?s.hot.map(c=>{const w=el("div","why");w.textContent=(c.your_traders&&c.your_traders.length?"Your traders: "+c.your_traders.map(t=>"@"+t).join(", ")+" · ":"")+"net "+km2(Math.abs(c.net))+(c.net<0?" selling":" buying");return coinCard(c,w)}):empty("Quiet on Fomo.")));
  $("tr-words").replaceChildren(...(s.words.length?s.words.map(w=>el("span",null,w)):empty("…")));
  $("tr-news").replaceChildren(...(s.news.length?s.news.map(n=>{const d=el("div","item");const w=el("div");w.append(link(n.title,n.link));d.append(w,el("span","dim",ago(n.ts)));d.append(el("div","sub",(n.source||"")+" · "+n.topic));return d}):empty("No headlines.")));
  $("tr-prof").replaceChildren(...(s.profiles.length?s.profiles.map(c=>coinCard(c)):empty("No new profiles.")));
- const rec=(s.picks_record||[]);const pc=(a,b)=>b==null||b<0||!a?"…":pct((b/a-1)*100);
+ const rec=(s.picks_record||[]);
  $("tr-record").replaceChildren(...(rec.length?rec.map(r=>{const d=el("div","item");d.append(el("b",null,"$"+r.symbol),el("span","dim","1h "+pc(r.p0,r.p1h)+" · 6h "+pc(r.p0,r.p6h)+" · 24h "+pc(r.p0,r.p24h)));return d}):empty("No picks graded yet. Each pick is checked 1h, 6h and 24h later.")))}
-setInterval(()=>{if(TAB==="trends")loadTrends()},20000);
-try{const t=localStorage.getItem("gk_tab");if(t==="trends"||t==="trench")tab(t)}catch(_){ }
+setInterval(()=>{if(TAB==="trends"||TAB==="events")loadTrends()},20000);
+try{const t=localStorage.getItem("gk_tab");if(t==="trends"||t==="trench"||t==="events")tab(t)}catch(_){ }
 function toast(e){const t=el("div","toast "+e.type);const n=NAMES[e.strategy]||e.strategy;
  t.textContent=e.type==="buy"?"🟢 "+n+" bought $"+e.symbol+" · "+money(e.usd):e.type==="partial"?((e.reason||"").includes("moonbag")?"🌙 "+n+" took profit on $"+e.symbol+", kept a moonbag · ":"🟡 "+n+" sold half of $"+e.symbol+" · ")+money(e.usd):
   "🔴 "+n+" sold $"+e.symbol+" · "+(e.pnl!=null?sgn(e.pnl):"")+(e.reason?" · "+e.reason:"");

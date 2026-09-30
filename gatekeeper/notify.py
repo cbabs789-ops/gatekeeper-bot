@@ -1,6 +1,8 @@
 """Telegram alerts. Plain HTTPS calls to the Bot API, nothing else."""
+import contextvars
 import html
 import logging
+import re
 
 import aiohttp
 
@@ -85,6 +87,28 @@ def _chunks(text, limit=3900):
     return out + [cur] if cur else out
 
 
+# ---- Telegram group with Topics: each kind of message goes to its own topic (set up with /setup in the group)
+TOPICS = [("trades", "📈 Paper trades"), ("fomo", "🔵 Fomo alerts"), ("news", "📣 Trump & news"), ("events", "🗓️ Events"),
+          ("trench", "⛏️ Trench wallets"), ("reports", "📊 Reports & tests")]
+ROUTES = {"chat": None, "threads": {}}          # filled from the database at startup
+REPLY = contextvars.ContextVar("reply_to", default=None)   # (chat, thread) a command came from: its answer goes back there
+
+
+def classify(text):
+    t = re.sub(r"^\[[A-Z]+\] ", "", (text or "").lstrip())
+    if t.startswith(("🟢", "🟡", "🌙", "✅", "🔴", "⚠️")) or "PAPER " in t[:40]:
+        return "trades"
+    if t.startswith(("🔵", "🔥", "🟠")):
+        return "fomo"
+    if t.startswith(("📣", "📰")):
+        return "news"
+    if t.startswith("🗓") and "event" in t[:40].lower():
+        return "events"
+    if t.startswith("⛏"):
+        return "trench"
+    return "reports"
+
+
 async def send(session, text, chat_id=None, token=None):
     parts = _chunks(text)
     if len(parts) > 1:
@@ -97,14 +121,21 @@ async def send(session, text, chat_id=None, token=None):
 
 async def _send_one(session, text, chat_id=None, token=None):
     token = token or config.TELEGRAM_BOT_TOKEN
+    thread = None
+    if chat_id is None:
+        if REPLY.get():
+            chat_id, thread = REPLY.get()
+        elif ROUTES["chat"]:
+            chat_id, thread = ROUTES["chat"], ROUTES["threads"].get(classify(text))
     chat_id = chat_id or config.TELEGRAM_CHAT_ID
     if not token or not chat_id:
         log.info("Telegram not configured; message: %s", text[:120])
         return False
     try:
-        async with session.post(API.format(token, "sendMessage"), json={
-                "chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True},
-                timeout=aiohttp.ClientTimeout(total=15)) as r:
+        body = {"chat_id": chat_id, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
+        if thread:
+            body["message_thread_id"] = thread
+        async with session.post(API.format(token, "sendMessage"), json=body, timeout=aiohttp.ClientTimeout(total=15)) as r:
             if r.status != 200:
                 log.warning("Telegram send failed %s: %s", r.status, (await r.text())[:200])
                 return False
@@ -112,6 +143,15 @@ async def _send_one(session, text, chat_id=None, token=None):
     except Exception as e:  # noqa: BLE001
         log.warning("Telegram error: %s", e)
         return False
+
+
+async def call(session, method, body, token=None):
+    token = token or config.TELEGRAM_BOT_TOKEN
+    async with session.post(API.format(token, method), json=body, timeout=aiohttp.ClientTimeout(total=15)) as r:
+        data = await r.json(content_type=None)
+        if not data.get("ok"):
+            raise RuntimeError(data.get("description") or "Telegram error")
+        return data.get("result")
 
 
 async def get_updates(session, offset=None, timeout=25, token=None):

@@ -63,6 +63,7 @@ class Runner:
         self.trends = trends.Trends(self)
         self.trench = trench.Trench(self)
         self.events = events.Events(self)
+        self._load_routes()
         risk.ensure(self.con)
         self.rug_model = risk.load(self.con)
         for st in self.strats.values():
@@ -73,6 +74,51 @@ class Runner:
         for name, st in self.strats.items():
             self._restore(name, st)
         self._close_orphans()
+
+    def _load_routes(self):
+        try:
+            g = json.loads(db.kv_get(self.con, "tg_group") or "{}")
+        except ValueError:
+            g = {}
+        notify.ROUTES.update(chat=g.get("chat"), threads=g.get("threads") or {})
+
+    async def setup_topics(self, msg):
+        """Run from inside a Telegram group: make one topic per kind of alert and send everything there from now on."""
+        chat = msg.get("chat") or {}
+        if chat.get("type") not in ("group", "supergroup"):
+            await notify.send(self.session, "Send /setup inside a Telegram group (with Topics turned on), not here.")
+            return
+        cid = chat["id"]
+        threads = {}
+        if chat.get("is_forum"):
+            try:
+                old = json.loads(db.kv_get(self.con, "tg_group") or "{}")
+            except ValueError:
+                old = {}
+            keep = old.get("threads", {}) if str(old.get("chat")) == str(cid) else {}
+            try:
+                for key, name in notify.TOPICS:
+                    if keep.get(key):
+                        threads[key] = keep[key]
+                        continue
+                    t = await notify.call(self.session, "createForumTopic", {"chat_id": cid, "name": name})
+                    threads[key] = t["message_thread_id"]
+            except Exception as e:  # noqa: BLE001
+                await notify.send(self.session, "I couldn't create topics (%s). Make me an admin with the \"Manage topics\" permission, then send /setup again." % html.escape(str(e)[:150]), chat_id=cid)
+                return
+        db.kv_set(self.con, "tg_group", json.dumps({"chat": cid, "threads": threads}))
+        self._load_routes()
+        if threads:
+            what = {"trades": "every paper buy, partial sell and sell", "fomo": "Fomo clusters, trending coins and your traders selling",
+                    "news": "Trump's posts and trend picks", "events": "upcoming speeches and summits with coins to watch",
+                    "trench": "trench wallet clusters", "reports": "daily and weekly summaries, test results, updates and stats"}
+            for key, name in notify.TOPICS:
+                notify.REPLY.set((cid, threads[key]))
+                await notify.send(self.session, "%s: this topic gets %s." % (name, what[key]))
+            notify.REPLY.set((cid, None))
+            await notify.send(self.session, "✅ Set up. Alerts now go to their own topics in this group. Commands work in any topic and the answer comes back to that topic. Send /unsetup to go back to the private chat.", chat_id=cid)
+        else:
+            await notify.send(self.session, "✅ Linked this group. Turn on Topics in the group settings and send /setup again to sort alerts into separate topics.", chat_id=cid)
 
     def _close_orphans(self):
         """Paper trades left open by a strategy that's since been turned off: nothing manages them, so close them
@@ -638,10 +684,21 @@ class Runner:
                 for u in await notify.get_updates(self.session, offset):
                     offset = u["update_id"] + 1
                     msg = u.get("message") or {}
-                    if str((msg.get("chat") or {}).get("id")) != str(config.TELEGRAM_CHAT_ID):
-                        continue
-                    cmd = (msg.get("text") or "").strip().split()[0].lower() if msg.get("text") else ""
-                    if cmd in ("/status", "status"):
+                    chat = str((msg.get("chat") or {}).get("id"))
+                    owner = str((msg.get("from") or {}).get("id")) == str(config.TELEGRAM_CHAT_ID)
+                    cmd = (msg.get("text") or "").strip().split()[0].lower().split("@")[0] if msg.get("text") else ""
+                    if chat != str(config.TELEGRAM_CHAT_ID):
+                        # a group: only you can command the bot there, and only /setup works before it's linked
+                        if not owner or (chat != str(notify.ROUTES["chat"]) and cmd != "/setup"):
+                            continue
+                    notify.REPLY.set((chat, msg.get("message_thread_id") if msg.get("is_topic_message") else None))
+                    if cmd == "/setup":
+                        await self.setup_topics(msg)
+                    elif cmd == "/unsetup":
+                        db.kv_set(self.con, "tg_group", "")
+                        notify.ROUTES.update(chat=None, threads={})
+                        await notify.send(self.session, "Alerts are back in your private chat with the bot.", chat_id=config.TELEGRAM_CHAT_ID)
+                    elif cmd in ("/status", "status"):
                         await notify.send(self.session, report.status_text(self.con, self.strats))
                     elif cmd in ("/today", "today"):
                         await notify.send(self.session, report.period_text(self.con, hours=24))
@@ -711,10 +768,12 @@ class Runner:
                             days = 7
                         asyncio.create_task(self.run_sweep(days))
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/events: upcoming speeches, summits and signings, and the coins that could move\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early\n/publish: push a stats snapshot to GitHub now")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/events: upcoming speeches, summits and signings, and the coins that could move\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early\n/publish: push a stats snapshot to GitHub now\n/setup: (send inside a Telegram group with Topics on) sort alerts into topics\n/unsetup: move alerts back to this private chat")
                     elif cmd.startswith("/"):
                         await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
+                notify.REPLY.set(None)
             except Exception as e:  # noqa: BLE001
+                notify.REPLY.set(None)
                 log.warning("Telegram poll error: %s", e)
                 await asyncio.sleep(10)
 
