@@ -53,6 +53,13 @@ VARIANTS = [
     ("Survivor + rug score + wider stop (-25%)", {"STOP_LOSS_PCT": 25}, "survivor", True),
     ("Survivor + rug score + no heavy-selling exit", {"SELL_PRESSURE_EXIT": 0}, "survivor", True),
     ("Current Main + rug score", {}, "main", True),
+    # --- the winner, loosened to find more trades (it only made 7 in 5 days) ---
+    ("Main + rug score, 60+ min old", {"MIN_AGE_MIN": 60}, "main", True),
+    ("Main + rug score, 90+ min old", {"MIN_AGE_MIN": 90}, "main", True),
+    ("Main + rug score, up to 24h old", {"MAX_AGE_MIN": 1440}, "main", True),
+    ("Main + rug score, pool $20K+", {"MIN_LIQ_USD": 20000}, "main", True),
+    ("Main + rug score, top 10 at 25%", {"MAX_TOP10_PCT": 25}, "main", True),
+    ("Main + rug score, skip 45%+", {"RISK_SKIP": 45}, "main", True),
     # --- moonshot hunter: $20 bets on young coins with early 10x signs (dev's first coin, has X) ---
     ("Moonshot Hunter (20-60 min, dev's first coin, has X, half at 3x)", {}, "moonshot"),
     ("Moonshot, dev's first coin only (X not required)", {"MOON_NEED_X": 0}, "moonshot"),
