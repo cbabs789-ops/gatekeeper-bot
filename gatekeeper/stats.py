@@ -117,7 +117,7 @@ async def loop(r):
             when = await publish(r)
             if first:
                 from . import notify
-                await notify.send(r.session, "📤 Stats now publish hourly to github.com/%s (latest %s)." % (repo(), when))
+                await notify.send(r.session, "📤 Stats now publish every 15 minutes to github.com/%s (latest %s)." % (repo(), when))
                 first = False
         except Exception as e:  # noqa: BLE001
             log.warning("Stats publish failed: %s", e)
@@ -125,4 +125,4 @@ async def loop(r):
                 from . import notify
                 await notify.send(r.session, "📤 Couldn't publish stats to GitHub: %s" % str(e)[:200])
                 first = False
-        await asyncio.sleep(float(config.os.environ.get("GK_STATS_MIN", "60")) * 60)
+        await asyncio.sleep(float(config.os.environ.get("GK_STATS_MIN", "15")) * 60)
