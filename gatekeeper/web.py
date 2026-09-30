@@ -270,6 +270,8 @@ def make_app(runner):
             return web.json_response({"error": "forbidden"}, status=403)
         tr = getattr(runner, "trends", None)
         st = dict(tr.state) if tr else {}
+        ev = getattr(runner, "events", None)
+        st["events"] = ev.state.get("events", []) if ev else []
         if st.get("updated"):
             # how the bot's own picks have done so far (graded like a trader in the scorecard)
             rows = runner.con.execute("SELECT symbol, p0, p1h, p6h, p24h FROM trader_calls WHERE trader='gatekeeper-picks' AND p0>0 ORDER BY ts DESC LIMIT 30").fetchall()
@@ -385,6 +387,7 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 </div>
 <div id="tab-trends" hidden>
 <p class="dim" id="tr-upd">Loading trends…</p>
+<h2>Upcoming events <span class="dim" style="text-transform:none;letter-spacing:0">(speeches, summits, signings, and coins that could move)</span></h2><div id="tr-events"></div>
 <h2>Worth a look <span class="dim" style="text-transform:none;letter-spacing:0">(the bot's picks, not buy signals)</span></h2><div class="cards" id="tr-sugg"></div>
 <h2>Trump's latest posts</h2><div class="list" id="tr-trump"></div>
 <h2>Coins riding the news</h2><div class="cards" id="tr-match"></div>
@@ -527,6 +530,7 @@ function renderTrends(s){if(!s.updated){$("tr-upd").textContent="Trends are stil
  $("tr-upd").textContent="Updated "+ago(s.updated)+" · refreshes every 2 minutes · picks are ideas to check, not buy signals";
  const empty=t=>[el("div","empty",t)];
  $("tr-sugg").replaceChildren(...(s.suggestions.length?s.suggestions.map(c=>{const w=el("div","why");w.textContent="Why: "+c.reasons.join(" · ");return coinCard(c,w)}):empty("Nothing strong enough right now.")));
+ $("tr-events").replaceChildren(...((s.events||[]).length?s.events.map(e=>{const box=el("div","post");const h=el("div");const b=el("b",null,e.when_text+": ");h.append(b);h.append(link(e.title,e.link));box.append(h);box.append(el("div","dim","topic: "+e.words.slice(0,4).join(", ")+(e.source?" · "+e.source:"")));const cs=el("div","cards");(e.coins||[]).forEach(c=>cs.append(coinCard(c)));if(!(e.coins||[]).length)cs.append(el("div","empty","No coins with a real pool for this yet."));box.append(cs);return box}):empty("No scheduled events found right now. Checked every 30 minutes.")));
  $("tr-trump").replaceChildren(...(s.trump.length?s.trump.map(p=>{const d=el("div","post");const txt=(p.title&&!p.title.startsWith("http"))?p.title:p.text;d.append(el("div",null,txt));const m=el("div","dim");m.style.fontSize="12px";m.style.marginTop="4px";m.append(document.createTextNode(ago(p.ts)+" · "));m.append(link("open post",p.link));d.append(m);return d}):empty("No posts loaded.")));
  $("tr-match").replaceChildren(...(s.matches.length?s.matches.map(c=>{const w=el("div","why");w.append(document.createTextNode("Matches: "+c.words.join(", ")));(c.headlines||[]).forEach(h=>{const x=el("div","dim");x.style.fontSize="12px";x.append(link(h.title,h.link));w.append(x)});return coinCard(c,w)}):empty("No coins matching today's news yet.")));
  $("tr-hot").replaceChildren(...(s.hot.length?s.hot.map(c=>{const w=el("div","why");w.textContent=(c.your_traders&&c.your_traders.length?"Your traders: "+c.your_traders.map(t=>"@"+t).join(", ")+" · ":"")+"net "+km2(Math.abs(c.net))+(c.net<0?" selling":" buying");return coinCard(c,w)}):empty("Quiet on Fomo.")));

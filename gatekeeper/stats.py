@@ -53,6 +53,7 @@ def build(r, con=None, trench_text=None):
     safe("traders", lambda: fomo.scorecard_text(con))
     safe("research", lambda: research.text(con))
     safe("trench", lambda: trench_text if trench_text is not None else r.trench.text())
+    safe("events", lambda: r.events.plain() if getattr(r, "events", None) else "")
     tr = r.trends.state if getattr(r, "trends", None) else {}
     picks = "\n".join("$%s: %s" % (c["symbol"], " · ".join(c["reasons"])) for c in tr.get("suggestions", [])) or "none right now"
     parts["trends"] = "Hot words: %s\nPicks:\n%s" % (", ".join(tr.get("words", [])[:15]), picks)
@@ -65,7 +66,7 @@ def build(r, con=None, trench_text=None):
     data = {"generated": int(time.time() * 1000), "generated_local": now.strftime("%Y-%m-%d %H:%M %Z"),
             "strategies": list(r.strats), "epochs": getattr(r, "epochs", {}), "open": open_, "closed_recent": closed,
             "rug_model": {k: v for k, v in (r.rug_model or {}).items() if k != "counts"}, "reports": parts}
-    order = ["status", "today", "week", "exits", "risk", "moonshots", "traders", "trench", "research", "trends"]
+    order = ["status", "today", "week", "exits", "risk", "moonshots", "traders", "trench", "research", "trends", "events"]
     md = ["# Gatekeeper stats: %s" % data["generated_local"], "",
           "Open paper trades: %d · strategies: %s" % (len(open_), ", ".join(r.strats)), ""]
     for k in order:
