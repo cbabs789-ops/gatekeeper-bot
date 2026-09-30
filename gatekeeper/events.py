@@ -83,12 +83,13 @@ def topic_words(title):
     for pat, ws in THEMES:
         if re.search(pat, title, re.I):
             words += ws
-    # the event's own names (people, places, products), e.g. "Stargate", "Greenland"
-    for w in re.findall(r"\b[A-Z][a-zA-Z]{4,}\b", title):
-        lw = w.lower()
-        if lw not in STOP and lw not in EVENT_WORDS and lw not in ("trump", "donald", "house", "white", "states", "united") and lw not in words:
-            words.append(lw)
+    # (the event's own place and people names were tried and matched junk coins, e.g. "center" -> $DATACENTER)
     return list(dict.fromkeys(words))[:6]
+
+
+def km(x):
+    x = float(x or 0)
+    return "$%.1fM" % (x / 1e6) if x >= 1e6 else "$%.0fK" % (x / 1e3) if x >= 1e3 else "$%.0f" % x
 
 
 def name_hit(word, sym, name):
@@ -121,7 +122,7 @@ class Events:
             for a, p in best_pairs(pairs).items():
                 base = p.get("baseToken") or {}
                 liq = float((p.get("liquidity") or {}).get("usd") or 0)
-                if liq < 15000 or not name_hit(w, base.get("symbol"), base.get("name")):
+                if liq < 15000 or len(base.get("symbol") or "") > 12 or not name_hit(w, base.get("symbol"), base.get("name")):
                     continue
                 if a not in found or liq > found[a]["liq"]:
                     info, pc = p.get("info") or {}, p.get("priceChange") or {}
@@ -223,7 +224,7 @@ class Events:
                  "\n<b>Coins that could move</b> (ideas to watch, not buy signals):"]
             for c in e["coins"]:
                 L.append("$%s (%s) · MC %s · pool %s · %s%s\n%s" % (
-                    html.escape(c["symbol"]), c["chain"], notify.mcap(1, c["mc"]) if c.get("mc") else "?", notify.money(c["liq"]),
+                    html.escape(c["symbol"]), c["chain"], notify.mcap(1, c["mc"]) if c.get("mc") else "?", km(c["liq"]),
                     "passes safety" if c["safety"] == "pass" else "⚠️ " + html.escape(c["safety"] or "not checked"),
                     " · rug risk %d%%" % c["risk"] if c.get("risk") is not None else "", notify.dex_link(c["address"], c["chain"])))
             L.append("\nThe move usually happens in the minutes after the headline, and news coins often dump right after. Plan your exit before you buy.")
@@ -250,7 +251,7 @@ class Events:
             L.append("\n<b>%s</b>: %s" % (e["when_text"], html.escape(e["title"])))
             L.append("topic: " + ", ".join(e["words"][:4]))
             for c in e["coins"]:
-                L.append("  $%s (%s) · pool %s%s · %s" % (html.escape(c["symbol"]), c["chain"], notify.money(c["liq"]),
+                L.append("  $%s (%s) · pool %s%s · %s" % (html.escape(c["symbol"]), c["chain"], km(c["liq"]),
                                                          " · rug risk %d%%" % c["risk"] if c.get("risk") is not None else "",
                                                          '<a href="%s">Fomo</a>' % notify.fomo_url(c["address"], c["chain"])))
             if not e["coins"]:
