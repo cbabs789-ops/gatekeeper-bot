@@ -47,6 +47,31 @@ class Trench:
         self.wallets = {}          # wallet -> row dict (tracked)
         self.load()
         self.alerted = {}
+        self.insiders = {}         # mint -> wallets that bought it (last 3 days): a red flag for entries
+        for r in runner.con.execute("SELECT DISTINCT mint, wallet FROM trench_events WHERE side='buy' AND ts>?",
+                                    (int(time.time() * 1000) - 3 * 86400000,)):
+            self.insiders.setdefault(r["mint"], set()).add(r["wallet"])
+
+    def insiders_in(self, mint):
+        return len(self.insiders.get(mint, ()))
+
+    def log_skip(self, cs, n):
+        """A strategy skipped this coin because insiders are in it. Graded 1h/6h/24h later like a trader's call."""
+        fomo.ensure_schema(self.r.con)
+        if self.r.con.execute("SELECT 1 FROM trader_calls WHERE trader='insider-skips' AND token_address=? AND ts>?",
+                              (cs.mint, cs.last_ts - 86400000)).fetchone():
+            return
+        self.r.con.execute("INSERT INTO trader_calls(trader, token_address, symbol, chain, ts, usd) VALUES('insider-skips',?,?,?,?,0)",
+                           (cs.mint, cs.symbol, "robinhood" if cs.mint.startswith("0x") else "solana", cs.last_ts))
+        log.info("Skipped $%s: %d known insider wallets in it", cs.symbol, n)
+
+    def skip_record(self):
+        fomo.ensure_schema(self.r.con)
+        rows = self.r.con.execute("SELECT p0, p6h FROM trader_calls WHERE trader='insider-skips'").fetchall()
+        graded = sorted((r["p6h"] / r["p0"] - 1) * 100 if r["p6h"] >= 0 else -100.0
+                        for r in rows if r["p0"] and r["p0"] > 0 and r["p6h"] is not None)
+        return {"skipped": len(rows), "graded": len(graded), "med6h": round(graded[len(graded) // 2], 1) if graded else None,
+                "dumped": sum(1 for g in graded if g <= -50), "ran": sum(1 for g in graded if g >= 50)}
 
     def load(self):
         self.wallets = {r["wallet"]: dict(r) for r in self.r.con.execute(
@@ -149,6 +174,7 @@ class Trench:
                                          (tx.get("signature"), w, side, mint, round(sol, 4), ts))
                 if not cur.rowcount or side != "buy":
                     continue
+                self.insiders.setdefault(mint, set()).add(w)
                 self.r.track_coin(mint, "solana")
                 fomo.ensure_schema(self.r.con)
                 self.r.con.execute("INSERT INTO trader_calls(trader, token_address, symbol, chain, ts, usd) VALUES(?,?,?,?,?,?)",
@@ -251,7 +277,7 @@ class Trench:
         moons = [dict(r) for r in con.execute(
             "SELECT t.mint, t.symbol, t.peak_x, t.buyers FROM trench_coins t WHERE t.moonshot=1 ORDER BY t.peak_x DESC LIMIT 12")]
         h = Helius(self.r.session, con)
-        return {"has_key": bool(key()), "wallets": wallets, "feed": feed, "hot": hot, "moons": moons,
+        return {"skips": self.skip_record(), "has_key": bool(key()), "wallets": wallets, "feed": feed, "hot": hot, "moons": moons,
                 "examined": coins["n"] or 0, "moonshots": coins["m"] or 0, "credits_today": h.used_today(),
                 "credit_cap": int(float(config.os.environ.get("GK_HELIUS_DAILY_CREDITS", "25000")))}
 
@@ -261,6 +287,9 @@ class Trench:
             return "Trench wallets need a Helius key (HELIUS_API_KEY)."
         L = ["⛏️ <b>Trench wallets</b>", "Coins examined: %d (%d moonshots) · Helius credits today: %s of %s" % (
             s["examined"], s["moonshots"], format(s["credits_today"], ","), format(s["credit_cap"], ","))]
+        k = s["skips"]
+        L.append("Insider rule: skipped %d coins these wallets bought%s" % (k["skipped"], (
+            " · %d graded: 6h median %+.0f%%, %d dumped 50%%+, %d ran 50%%+" % (k["graded"], k["med6h"], k["dumped"], k["ran"])) if k["graded"] else ""))
         if not s["wallets"]:
             L.append("No wallets with 2+ early moonshot buys yet. Discovery runs every 3 hours.")
         for w in s["wallets"][:10]:

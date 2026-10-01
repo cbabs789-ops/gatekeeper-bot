@@ -95,6 +95,21 @@ class Strategy:
         self.traded = set()
         self.closed = []                     # finished Position objects
         self.risk_model = None               # rug-risk model (set by the runner and the rule test)
+        self.insider_lookup = None           # mint -> number of known insider (trench) wallets that bought it (live only)
+        self.on_skip = None                  # called when a coin is skipped for insiders, so the skip can be graded later
+
+    def insider_skip(self, cs):
+        """True if known insider wallets are in this coin (they rug 94-100% of the time). Logs the skip."""
+        need = self.p.get("INSIDER_SKIP", 0)
+        if not need or not self.insider_lookup:
+            return False
+        n = self.insider_lookup(cs.mint)
+        if n < need:
+            return False
+        self.traded.add(cs.mint)
+        if self.on_skip:
+            self.on_skip(cs, n)
+        return True
 
     # ---- feed
     def on_snapshot(self, s, coin):
@@ -263,6 +278,8 @@ class Strategy:
             return None
         if self.safety_fails(mint, cs.last_liq):
             return None
+        if self.insider_skip(cs):
+            return None
         rk, usd = self.risk_and_size(cs)
         if not usd:
             return None
@@ -322,6 +339,8 @@ class Strategy:
             return None
         ok, why, _ = self.entry_check(cs, s)
         if not ok:
+            return None
+        if self.insider_skip(cs):
             return None
         rk, usd = self.risk_and_size(cs)
         if not usd:

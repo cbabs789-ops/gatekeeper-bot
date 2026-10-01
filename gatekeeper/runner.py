@@ -62,6 +62,8 @@ class Runner:
         self.sell_warned = {}
         self.trends = trends.Trends(self)
         self.trench = trench.Trench(self)
+        for st in self.strats.values():
+            st.insider_lookup, st.on_skip = self.trench.insiders_in, self.trench.log_skip
         self.events = events.Events(self)
         self._load_routes()
         risk.ensure(self.con)
