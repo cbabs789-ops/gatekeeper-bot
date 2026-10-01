@@ -30,7 +30,7 @@ QUERIES = ("Trump to speak", "Trump will address", "Trump to host", "Trump to si
 FUTURE = re.compile(r"\b(to (speak|address|host|sign|announce|meet|unveil|deliver|hold|visit|attend|headline|reveal)|"
                     r"will (speak|address|host|sign|announce|meet|unveil|deliver|hold|visit|attend|reveal)|set to|expected to|"
                     r"scheduled|upcoming|plans to|tonight|tomorrow|this week|next week|later today)\b", re.I)
-PAST = re.compile(r"\b(spoke|said|signed|hosted|announced|met with|delivered|unveiled|after|recap|takeaways|what we learned)\b", re.I)
+PAST = re.compile(r"\b(spoke|said|signed|hosted|announced|met with|delivered|unveiled|after|recap|takeaways|what we learned|had the chance|threw|instead|failed to|missed|why|opinion|analysis)\b", re.I)
 EVENT_WORDS = set("""speak speaks speech address addresses host hosts summit rally sign signs signing announce announcement
 press conference meet meets meeting unveil deliver hold visit attend expected scheduled upcoming tonight tomorrow week
 white house plans leaders executive order remarks event events tuesday wednesday thursday friday saturday sunday monday
