@@ -153,9 +153,11 @@ class Runner:
             pre = "GK_" + ("%s_" % name.upper() if name != "main" else "")
             custom = any(config.os.environ.get(pre + k) not in (None, "") for k in config.STRATEGY_DEFAULTS)
             ep = now_ms() if custom else 0
-        elif old != h:
-            ep = now_ms()
+        elif old != h and config.os.environ.get("GK_AUTO_RESET", "0") == "1":
+            ep = now_ms()                     # off by default: the count only restarts when you send /reset
         db.kv_set(self.con, "rules_hash_" + name, h)
+        if str(int(float(ep or 0))) != str(db.kv_get(self.con, "rules_since_" + name)):
+            db.kv_set(self.con, "rules_since_prev_" + name, db.kv_get(self.con, "rules_since_" + name) or 0)
         db.kv_set(self.con, "rules_since_" + name, int(float(ep or 0)))
         self.epochs[name] = int(float(ep or 0))
 
