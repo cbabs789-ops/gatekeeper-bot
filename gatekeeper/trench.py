@@ -167,6 +167,8 @@ class Trench:
             w = self.wallets.get(r["wallet"], {})
             who.append("%s (%s moonshots, e.g. %s)" % (short(r["wallet"]), w.get("hits", "?"), (w.get("examples") or "")[:40]))
         rk = self.r.rug_risk(mint)[0]
+        if config.os.environ.get("GK_TRENCH_ALERTS", "0") != "1":
+            return                            # dashboard only: these wallets turned out to be insiders whose buys rug
         await notify.send(self.r.session, "⛏️ <b>Trench cluster: %d wallets that caught earlier moonshots just bought</b>\n%s%s\n%s\nWorth a look, not a buy signal." % (
             len(rows), html.escape("\n".join(who)), ("\nRug risk: %d%%" % rk) if rk is not None else "", notify.dex_link(mint, "solana")))
 
@@ -215,7 +217,7 @@ class Trench:
                     if self.wallets:
                         url = (await web.public_url(self.r.session, self.r.con)).split("/?")[0] + "/hook/" + self.hook_secret()
                         hooked = bool(await h.set_webhook(url, list(self.wallets)))
-                    if self.wallets and not announced:
+                    if self.wallets and not announced and config.os.environ.get("GK_TRENCH_ALERTS", "0") == "1":
                         announced = True
                         await notify.send(self.r.session, "⛏️ Found %d trench wallets that got into 2+ moonshots early. Watching them %s. Send /trench or open the Trench tab." % (
                             len(self.wallets), "live" if hooked else "every few minutes"))
