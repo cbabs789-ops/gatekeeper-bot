@@ -61,6 +61,13 @@ VARIANTS = [
     ("Main + rug score, pool $20K+", {"MIN_LIQ_USD": 20000}, "main", True),
     ("Main + rug score, top 10 at 25%", {"MAX_TOP10_PCT": 25}, "main", True),
     ("Main + rug score, skip 35%+", {"RISK_SKIP": 35}, "main", True),
+    # --- winners give back too much: bank part of the spike instead of trailing it ---
+    ("Main + rug score, sell half at +40%", {"TAKE_HALF_X": 1.4}, "main", True),
+    ("Main + rug score, sell half at +60%", {"TAKE_HALF_X": 1.6}, "main", True),
+    ("Main + rug score, sell all at +40%", {"TAKE_PROFIT_PCT": 40}, "main", True),
+    ("Main + rug score, sell all at +60%", {"TAKE_PROFIT_PCT": 60}, "main", True),
+    ("Main + rug score, tighter lock (trail 10% once up 20%)", {"LOCK_TRAIL_PCT": 10}, "main", True),
+    ("Main + rug score, half at +40% then trail 10%", {"TAKE_HALF_X": 1.4, "LOCK_TRAIL_PCT": 10}, "main", True),
     # --- moonshot hunter: $20 bets on young coins with early 10x signs (dev's first coin, has X) ---
     ("Moonshot Hunter (20-60 min, dev's first coin, has X, half at 3x)", {}, "moonshot"),
     ("Moonshot, dev's first coin only (X not required)", {"MOON_NEED_X": 0}, "moonshot"),
