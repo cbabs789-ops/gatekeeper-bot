@@ -47,7 +47,7 @@ class Runner:
         self.con = db.connect()
         self.safety = {r["mint"]: dict(r) for r in self.con.execute("SELECT * FROM safety")}
         look = lambda m: self.safety.get(m)  # noqa: E731
-        self.strats = {name: Strategy(config.strategy_params(preset=name), look) for name in config.ENABLED_PRESETS}
+        self.strats = {name: Strategy(config.strategy_params(preset=name), look) for name in config.ENABLED_PRESETS + config.SHADOW_PRESETS}
         self.strat = self.strats.get("main") or next(iter(self.strats.values()))
         self.p = self.strat.p
         # safety checks must cover the loosest strategy
@@ -736,6 +736,8 @@ class Runner:
                             await notify.send(self.session, "📤 Stats published (%s)." % when)
                         except Exception as e:  # noqa: BLE001
                             await notify.send(self.session, "📤 Publish failed: %s" % html.escape(str(e)[:200]))
+                    elif cmd in ("/experiments", "experiments", "/x"):
+                        await notify.send(self.session, report.experiments_text(self.con))
                     elif cmd in ("/events", "events", "/speeches"):
                         await notify.send(self.session, self.events.text())
                     elif cmd in ("/trench", "trench", "/wallets"):
@@ -772,7 +774,7 @@ class Runner:
                             days = 7
                         asyncio.create_task(self.run_sweep(days))
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/events: upcoming speeches, summits and signings, and the coins that could move\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early\n/publish: push a stats snapshot to GitHub now\n/setup: (send inside a Telegram group with Topics on) sort alerts into topics\n/unsetup: move alerts back to this private chat")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/events: upcoming speeches, summits and signings, and the coins that could move\n/experiments: how the test copies of Main are doing (sell all at +40%, tighter trail, stricter rug skip)\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early\n/publish: push a stats snapshot to GitHub now\n/setup: (send inside a Telegram group with Topics on) sort alerts into topics\n/unsetup: move alerts back to this private chat")
                     elif cmd.startswith("/"):
                         await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
                 notify.REPLY.set(None)

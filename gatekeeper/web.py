@@ -142,7 +142,7 @@ def state(runner):
                 "chart": dict(chart_data(con, mint, pos.opened_at, now, pos.spot_at_entry, pos.legs),
                               levels=_levels(st.p, pos, pos.spot_at_entry)) if pos.spot_at_entry else None})
         out["strategies"].append({
-            "name": name, "label": report.LABEL.get(name, name), "alerts": name in config.ALERT_PRESETS,
+            "name": name, "label": report.LABEL.get(name, name), "alerts": name in config.ALERT_PRESETS, "shadow": name in config.SHADOW,
             "all": _stats(closed), "current": _stats(current), "since": since, "today": _stats(today),
             "open": len(st.positions), "unrealized": round(unreal, 2)})
         eq, pts = 0.0, []
@@ -153,7 +153,15 @@ def state(runner):
         step = max(1, len(pts) // 300)
         out["equity"][name] = pts[::step] + (pts[-1:] if pts and (len(pts) - 1) % step else [])
 
-    for r in con.execute("SELECT * FROM trades WHERE mode='live' AND closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 50"):
+    # experiments: Main and its silent test copies, compared over the same stretch (since the first test trade)
+    xs = [n for n in runner.strats if n in config.SHADOW]
+    r0 = con.execute("SELECT MIN(opened_at) t FROM trades WHERE mode='live' AND run_id IN (%s)" % ",".join("?" * len(xs)), xs).fetchone() if xs else None
+    x0 = r0["t"] if r0 and r0["t"] else None
+    out["experiments"] = {"since": x0, "rows": [
+        {"name": n, "label": report.LABEL.get(n, n).replace("Test: ", "").replace("Main (strict rules)", "Main (as set)"),
+         "stats": _stats(report._closed(con, since_ms=x0, strategy=n)) if x0 else _stats([]),
+         "open": len(runner.strats[n].positions)} for n in ["main"] + xs if n in runner.strats]}
+    for r in con.execute("SELECT * FROM trades WHERE mode='live' AND closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 120"):
         try:
             lg = json.loads(r["legs"] or "[]")
         except ValueError:
@@ -379,7 +387,13 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 @keyframes pop{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 </style></head><body><div class="wrap">
 <header><h1>🤖 Gatekeeper Live</h1><span class="pill" id="health">connecting…</span></header>
-<nav class="tabs"><button id="tb-trading" class="on" onclick="tab('trading')">📈 Trading</button><button id="tb-trends" onclick="tab('trends')">📰 Trends</button><button id="tb-events" onclick="tab('events')">🗓️ Events</button><button id="tb-trench" onclick="tab('trench')">⛏️ Trench</button></nav>
+<nav class="tabs"><button id="tb-trading" class="on" onclick="tab('trading')">📈 Trading</button><button id="tb-trends" onclick="tab('trends')">📰 Trends</button><button id="tb-events" onclick="tab('events')">🗓️ Events</button><button id="tb-trench" onclick="tab('trench')">⛏️ Insiders</button><button id="tb-exp" onclick="tab('exp')">🧪 Experiments</button></nav>
+<div id="tab-exp" hidden>
+<p class="dim">Copies of Main with one thing changed, trading the same coins silently on paper. No alerts, and they never count toward Main's results. After about a week, the best one becomes Main.</p>
+<h2>Head to head</h2><div class="list" id="x-table"></div>
+<h2>Open experiment trades</h2><div class="list" id="x-open"></div>
+<h2>Closed experiment trades</h2><div class="list" id="x-closed"></div>
+</div>
 <div id="tab-events" hidden>
 <p class="dim">Speeches, summits, signings and announcements found in the news before they happen, with the coins most likely to move. Checked every 30 minutes. Ideas to watch, not buy signals: news coins often pump before the event and dump right after.</p>
 <h2>Upcoming events</h2><div id="tr-events"><div class="empty">Loading…</div></div>
@@ -387,10 +401,9 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 </div>
 <div id="tab-trench" hidden>
 <p class="dim" id="tn-upd">Loading…</p>
-<h2>Coins trench wallets are buying (24h)</h2><div class="list" id="tn-hot"></div>
-<h2>Live trades</h2><div class="list" id="tn-feed"></div>
-<h2>Trench wallets <span class="dim" style="text-transform:none;letter-spacing:0">(early in 2+ moonshots)</span></h2><div class="list" id="tn-wallets"></div>
-<h2>Moonshots studied</h2><div class="list" id="tn-moons"></div>
+<p class="dim">Wallets that keep showing up early in coins that run, then dump on everyone (their buys are usually down 90%+ six hours later). Main and Follow skip any coin they've bought. Use this as a red flag list.</p>
+<h2>🚩 Coins insiders bought (24h)</h2><div class="list" id="tn-hot"></div>
+<h2>Known insider wallets</h2><div class="list" id="tn-wallets"></div>
 </div>
 <div id="tab-trends" hidden>
 <p class="dim" id="tr-upd">Loading trends…</p>
@@ -398,9 +411,7 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 <h2>Trump's latest posts</h2><div class="list" id="tr-trump"></div>
 <h2>Coins riding the news</h2><div class="cards" id="tr-match"></div>
 <h2>Hot on Fomo (last 3h)</h2><div class="cards" id="tr-hot"></div>
-<h2>Hot words in the news</h2><div class="words" id="tr-words"></div>
 <h2>Headlines</h2><div class="list" id="tr-news"></div>
-<h2>New coin profiles on DexScreener</h2><div class="cards" id="tr-prof"></div>
 <h2>How the bot's picks did</h2><div class="list" id="tr-record"></div>
 </div>
 <div id="tab-trading">
@@ -429,7 +440,12 @@ const t=ms=>{const d=new Date(ms);return d.toLocaleString([], {month:"short",day
 const mcf=v=>{if(!v)return null;if(v>=1e9)return "$"+(+(v/1e9).toFixed(2))+"B MC";if(v>=1e6)return "$"+(+(v/1e6).toFixed(2))+"M MC";
  if(v>=1e3)return "$"+(+(v/1e3).toFixed(v>=1e5?0:1))+"K MC";return "$"+Math.round(v)+" MC"};
 const dur=ms=>{const m=Math.round(ms/60000);return m<60?m+"m":Math.floor(m/60)+"h "+(m%60)+"m"};
-const NAMES={main:"Main",wide:"Wide",follow:"Follow",momentum:"Momentum",survivor:"Survivor"};
+const NAMES={main:"Main",wide:"Wide",follow:"Follow",momentum:"Momentum",survivor:"Survivor",x_all40:"Sell all +40%",x_trail10:"Tight trail",x_skip35:"Rug skip 35%"};
+function renderExp(X,s){if(!$("x-table"))return;const E=s.experiments||{rows:[]};
+ $("x-table").replaceChildren(...(E.rows.length>1?[el("div","dim",E.since?"Compared since "+t(E.since)+" (the first experiment trade)":"Waiting for the first trade. They trade the same coins as Main.")].concat(E.rows.map(r=>{const d=el("div","item");const a=r.stats;const w=el("div");w.append(el("b",null,r.label));if(r.name==="main")w.append(el("span","tag","live strategy"));
+  d.append(w,el("b",cls(a.pnl),sgn(a.pnl)));d.append(el("div","sub",a.trades+" trades · "+a.win_rate+"% win · "+(a.trades?sgn(a.pnl/a.trades)+" a trade":"no trades yet")+" · open now "+r.open));return d})):[el("div","empty","Experiments start with the next update.")]));
+ $("x-open").replaceChildren(...(X.open.length?X.open.map(p=>{const d=el("div","item");const w=el("div");w.append(link("$"+p.symbol,p.link),el("span","tag",NAMES[p.strategy]||p.strategy));d.append(w,el("b",cls(p.pnl),sgn(p.pnl)+" ("+pct(p.pnl_pct)+")"));d.append(el("div","sub","held "+dur(s.now-p.opened_at)+(p.took_half?" · sold half":"")));return d}):[el("div","empty","None open.")]));
+ $("x-closed").replaceChildren(...(X.closed.length?X.closed.slice(0,40).map(c=>{const d=el("div","item");const w=el("div");w.append(link("$"+c.symbol,c.link),el("span","tag",NAMES[c.strategy]||c.strategy));d.append(w,el("b",cls(c.pnl),sgn(c.pnl)+" ("+pct(c.pnl_pct)+")"));d.append(el("div","sub",t(c.closed_at)+" · "+(c.exit||"")));return d}):[el("div","empty","No closed experiment trades yet. They trade the same coins as Main, so they start when Main finds its next coin.")]))}
 function link(txt,href){if(!href)return el("span",null,txt);const a=el("a",null,txt);a.href=href;a.target="_blank";a.rel="noopener";return a}
 function spark(pts){const ns="http://www.w3.org/2000/svg",s=document.createElementNS(ns,"svg");s.setAttribute("viewBox","0 0 300 70");s.setAttribute("preserveAspectRatio","none");
  if(!pts||pts.length<2)return s;const ys=pts.map(p=>p[1]).concat([0]);const lo=Math.min(...ys),hi=Math.max(...ys),r=(hi-lo)||1;
@@ -466,7 +482,13 @@ function tradeLog(log){const box=el("div","tlog");(log||[]).forEach(g=>{const r=
 const OPEN_CHARTS={};
 async function toggleChart(item,id){if(OPEN_CHARTS[id]){delete OPEN_CHARTS[id];const c=item.querySelector(".chart");if(c)c.remove();const g=item.querySelector(".legend");if(g)g.remove();return}
  OPEN_CHARTS[id]="loading";try{const r=await fetch("api/chart?id="+id+"&k="+encodeURIComponent(K));OPEN_CHARTS[id]=await r.json();item.append(priceChart(OPEN_CHARTS[id]))}catch(_){delete OPEN_CHARTS[id]}}
+const SHADOW={};
 function render(s){
+ s.strategies.forEach(x=>{if(x.shadow)SHADOW[x.name]=1});
+ const X={strategies:s.strategies.filter(x=>x.shadow),open:s.open.filter(p=>SHADOW[p.strategy]),closed:s.closed.filter(c=>SHADOW[c.strategy])};
+ s.strategies=s.strategies.filter(x=>!x.shadow);s.open=s.open.filter(p=>!SHADOW[p.strategy]);s.closed=s.closed.filter(c=>!SHADOW[c.strategy]).slice(0,30);
+ s.activity=s.activity.filter(a=>!SHADOW[a.strategy]).slice(0,20);
+ renderExp(X,s);
  const h=s.health,ok=h.last_poll_s!=null&&h.last_poll_s<120;
  $("health").replaceChildren(el("span","dot"+(ok?"":" bad")),document.createTextNode((ok?"Live":"Price feed stalled")+" · last price check "+(h.last_poll_s??"?")+"s ago · "+(h.watching??"?")+" coins watched · open trades priced "+(h.fast_s!=null?h.fast_s+"s ago":"every 30s")+" · Fomo "+(h.fomo_last_s!=null?h.fomo_last_s+"s ago":"off")));
  let all=0,today=0,unr=0,open=0;s.strategies.forEach(x=>{all+=x.current.pnl;today+=x.today.pnl;unr+=x.unrealized;open+=x.open});
@@ -506,7 +528,7 @@ async function load(){try{const r=await fetch("api/state?k="+encodeURIComponent(
  catch(e){$("health").replaceChildren(el("span","dot bad"),document.createTextNode("Can't reach the bot ("+e.message+"). Retrying…"))}}
 load();setInterval(load,5000);
 let TAB="trading";
-function tab(t){TAB=t;["trading","trends","events","trench"].forEach(x=>{$("tab-"+x).hidden=t!==x;$("tb-"+x).classList.toggle("on",t===x)});
+function tab(t){TAB=t;["trading","trends","events","trench","exp"].forEach(x=>{$("tab-"+x).hidden=t!==x;$("tb-"+x).classList.toggle("on",t===x)});
  try{localStorage.setItem("gk_tab",t)}catch(_){ }if(t==="trends"||t==="events")loadTrends();if(t==="trench")loadTrench()}
 const sw=w=>w.slice(0,4)+"…"+w.slice(-4);
 async function loadTrench(){try{const r=await fetch("api/trench?k="+encodeURIComponent(K),{cache:"no-store"});renderTrench(await r.json())}catch(e){$("tn-upd").textContent="Couldn't load ("+e.message+")"}}
@@ -514,11 +536,11 @@ function renderTrench(s){if(!s.has_key){$("tn-upd").textContent="Needs a Helius 
  $("tn-upd").textContent="Coins studied: "+s.examined+" ("+s.moonshots+" moonshots) · Helius credits today: "+s.credits_today.toLocaleString()+" of "+s.credit_cap.toLocaleString()+" · discovery runs every 3h"+(s.skips?" · insider rule skipped "+s.skips.skipped+" coins"+(s.skips.graded?" (6h median "+pct(s.skips.med6h)+", "+s.skips.dumped+" dumped 50%+, "+s.skips.ran+" ran 50%+)":""):"");
  const empty=t=>[el("div","empty",t)];const fl=(m,sym)=>link("$"+(sym||m.slice(0,6)),"https://fomo.family/tokens/solana/"+m);
  $("tn-hot").replaceChildren(...(s.hot.length?s.hot.map(h=>{const d=el("div","item");const w=el("div");w.append(fl(h.mint,h.symbol));d.append(w,el("b",h.n>=2?"up":"",h.n+" wallet"+(h.n>1?"s":"")));d.append(el("div","sub",(h.sol_in||0).toFixed(2)+" SOL in · last buy "+ago(h.last)));return d}):empty("No trench buys yet.")));
- $("tn-feed").replaceChildren(...(s.feed.length?s.feed.map(e=>{const d=el("div","item");const w=el("div");w.append(document.createTextNode(e.side==="buy"?"🟢 ":"🔴 "),fl(e.mint,e.symbol));d.append(w,el("span","dim",(e.sol||0).toFixed(2)+" SOL"));const sub=el("div","sub");sub.append(link(sw(e.wallet),"https://solscan.io/account/"+e.wallet),document.createTextNode(" · "+ago(e.ts)));d.append(sub);return d}):empty("Waiting for their next trade.")));
- $("tn-wallets").replaceChildren(...(s.wallets.length?s.wallets.map(w=>{const d=el("div","item");const a=el("div");a.append(el("b",null,"#"+w.rank+" "),link(sw(w.wallet),"https://solscan.io/account/"+w.wallet));
+ if($("tn-feed"))$("tn-feed").replaceChildren(...(s.feed.length?s.feed.map(e=>{const d=el("div","item");const w=el("div");w.append(document.createTextNode(e.side==="buy"?"🟢 ":"🔴 "),fl(e.mint,e.symbol));d.append(w,el("span","dim",(e.sol||0).toFixed(2)+" SOL"));const sub=el("div","sub");sub.append(link(sw(e.wallet),"https://solscan.io/account/"+e.wallet),document.createTextNode(" · "+ago(e.ts)));d.append(sub);return d}):empty("Waiting for their next trade.")));
+ $("tn-wallets").replaceChildren(...(s.wallets.length?s.wallets.slice(0,12).map(w=>{const d=el("div","item");const a=el("div");a.append(el("b",null,"#"+w.rank+" "),link(sw(w.wallet),"https://solscan.io/account/"+w.wallet));
   d.append(a,el("b","up",w.hits+" moonshots"));d.append(el("div","sub","early in "+w.hits+" of "+w.seen+" coins studied ("+w.hit_rate+"%) · avg "+w.avg_x+"x · best "+w.best_x+"x"+(w.live_med6h!=null?" · live buys: "+w.live_buys+", 6h median "+pct(w.live_med6h):"")));
   d.append(el("div","sub","e.g. "+(w.examples||"")));return d}):empty("None yet. The first discovery runs about 2 minutes after the bot starts, then every 3 hours.")));
- $("tn-moons").replaceChildren(...(s.moons.length?s.moons.map(m=>{const d=el("div","item");const w=el("div");w.append(fl(m.mint,m.symbol));d.append(w,el("b","up",m.peak_x+"x"));d.append(el("div","sub",(m.buyers>=0?m.buyers+" early buyers read":"history too long to read")));return d}):empty("None studied yet.")))}
+ if($("tn-moons"))$("tn-moons").replaceChildren(...(s.moons.length?s.moons.map(m=>{const d=el("div","item");const w=el("div");w.append(fl(m.mint,m.symbol));d.append(w,el("b","up",m.peak_x+"x"));d.append(el("div","sub",(m.buyers>=0?m.buyers+" early buyers read":"history too long to read")));return d}):empty("None studied yet.")))}
 setInterval(()=>{if(TAB==="trench")loadTrench()},10000);
 const ago=ms=>{const m=Math.round((Date.now()-ms)/60000);return m<60?m+"m ago":m<1440?Math.round(m/60)+"h ago":Math.round(m/1440)+"d ago"};
 const km2=v=>v==null?"n/a":v>=1e9?"$"+(v/1e9).toFixed(2)+"B":v>=1e6?"$"+(v/1e6).toFixed(2)+"M":v>=1e3?"$"+(v/1e3).toFixed(0)+"K":"$"+Math.round(v);
@@ -542,14 +564,14 @@ function renderTrends(s){if(!s.updated){$("tr-upd").textContent="Trends are stil
  $("tr-trump").replaceChildren(...(s.trump.length?s.trump.map(p=>{const d=el("div","post");const txt=(p.title&&!p.title.startsWith("http"))?p.title:p.text;d.append(el("div",null,txt));const m=el("div","dim");m.style.fontSize="12px";m.style.marginTop="4px";m.append(document.createTextNode(ago(p.ts)+" · "));m.append(link("open post",p.link));d.append(m);return d}):empty("No posts loaded.")));
  $("tr-match").replaceChildren(...(s.matches.length?s.matches.map(c=>{const w=el("div","why");w.append(document.createTextNode("Matches: "+c.words.join(", ")));(c.headlines||[]).forEach(h=>{const x=el("div","dim");x.style.fontSize="12px";x.append(link(h.title,h.link));w.append(x)});return coinCard(c,w)}):empty("No coins matching today's news yet.")));
  $("tr-hot").replaceChildren(...(s.hot.length?s.hot.map(c=>{const w=el("div","why");w.textContent=(c.your_traders&&c.your_traders.length?"Your traders: "+c.your_traders.map(t=>"@"+t).join(", ")+" · ":"")+"net "+km2(Math.abs(c.net))+(c.net<0?" selling":" buying");return coinCard(c,w)}):empty("Quiet on Fomo.")));
- $("tr-words").replaceChildren(...(s.words.length?s.words.map(w=>el("span",null,w)):empty("…")));
- $("tr-news").replaceChildren(...(s.news.length?s.news.map(n=>{const d=el("div","item");const w=el("div");w.append(link(n.title,n.link));d.append(w,el("span","dim",ago(n.ts)));d.append(el("div","sub",(n.source||"")+" · "+n.topic));return d}):empty("No headlines.")));
- $("tr-prof").replaceChildren(...(s.profiles.length?s.profiles.map(c=>coinCard(c)):empty("No new profiles.")));
+ if($("tr-words"))$("tr-words").replaceChildren(...(s.words.length?s.words.map(w=>el("span",null,w)):empty("…")));
+ $("tr-news").replaceChildren(...(s.news.length?s.news.slice(0,10).map(n=>{const d=el("div","item");const w=el("div");w.append(link(n.title,n.link));d.append(w,el("span","dim",ago(n.ts)));d.append(el("div","sub",(n.source||"")+" · "+n.topic));return d}):empty("No headlines.")));
+ if($("tr-prof"))$("tr-prof").replaceChildren(...(s.profiles.length?s.profiles.map(c=>coinCard(c)):empty("No new profiles.")));
  const rec=(s.picks_record||[]);
  $("tr-record").replaceChildren(...(rec.length?rec.map(r=>{const d=el("div","item");d.append(el("b",null,"$"+r.symbol),el("span","dim","1h "+pc(r.p0,r.p1h)+" · 6h "+pc(r.p0,r.p6h)+" · 24h "+pc(r.p0,r.p24h)));return d}):empty("No picks graded yet. Each pick is checked 1h, 6h and 24h later.")))}
 setInterval(()=>{if(TAB==="trends"||TAB==="events")loadTrends()},20000);
-try{const t=localStorage.getItem("gk_tab");if(t==="trends"||t==="trench"||t==="events")tab(t)}catch(_){ }
-function toast(e){const t=el("div","toast "+e.type);const n=NAMES[e.strategy]||e.strategy;
+try{const t=localStorage.getItem("gk_tab");if(["trends","trench","events","exp"].includes(t))tab(t)}catch(_){ }
+function toast(e){if(SHADOW[e.strategy]||(e.strategy||"").startsWith("x_"))return;const t=el("div","toast "+e.type);const n=NAMES[e.strategy]||e.strategy;
  t.textContent=e.type==="buy"?"🟢 "+n+" bought $"+e.symbol+" · "+money(e.usd):e.type==="partial"?((e.reason||"").includes("moonbag")?"🌙 "+n+" took profit on $"+e.symbol+", kept a moonbag · ":"🟡 "+n+" sold half of $"+e.symbol+" · ")+money(e.usd):
   "🔴 "+n+" sold $"+e.symbol+" · "+(e.pnl!=null?sgn(e.pnl):"")+(e.reason?" · "+e.reason:"");
  $("toasts").prepend(t);setTimeout(()=>t.remove(),12000);try{navigator.vibrate&&navigator.vibrate(120)}catch(_){}}

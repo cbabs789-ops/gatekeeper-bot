@@ -138,11 +138,25 @@ PRESETS = {
         "SELL_PRESSURE_EXIT": 1, "LIQ_DRAIN_PCT": 12, "MOONBAG_PCT": 20, "MOON_TRAIL_PCT": 40,
     },
 }
+# Experiments: copies of Main with one exit or filter changed, trading silently on paper so the best version
+# shows up in live conditions. Kept apart from Main and Follow: no alerts, own dashboard tab, not in Telegram summaries.
+SHADOW = {
+    "x_all40": {"TAKE_PROFIT_PCT": 40},       # sell everything at +40%
+    "x_trail10": {"LOCK_TRAIL_PCT": 10},      # tighter profit lock (10% trail once up 20%)
+    "x_skip35": {"RISK_SKIP": 35},            # stricter rug skip
+}
+SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_all40,x_trail10,x_skip35").split(",") if x.strip() in SHADOW]
 ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main,wide,follow").split(",") if x.strip()]
 ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,follow,survivor").split(",") if x.strip() in PRESETS]
 
 
 def strategy_params(overrides=None, preset="main"):
+    if preset in SHADOW:
+        p = strategy_params(preset="main")    # same as Main, including your config-file settings for Main
+        p.update(SHADOW[preset])
+        for k, v in (overrides or {}).items():
+            p[k.upper()] = type(p[k.upper()])(float(v))
+        return p
     p = dict(STRATEGY_DEFAULTS)
     p.update(PRESETS.get(preset, {}))
     for k, v in STRATEGY_DEFAULTS.items():

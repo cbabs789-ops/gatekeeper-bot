@@ -10,7 +10,8 @@ from .notify import money
 from .strategy import summarize
 
 TZ = ZoneInfo(config.TIMEZONE)
-LABEL = {"main": "Main (strict rules)", "wide": "Wide (newer coins, looser)", "follow": "Follow (copies your Fomo traders)", "momentum": "Momentum (day-trader style)", "survivor": "Survivor (4h+ coins climbing steadily)", "moonshot": "Moonshot Hunter ($20 bets on early 10x signs)"}
+LABEL = {"main": "Main (strict rules)", "wide": "Wide (newer coins, looser)", "follow": "Follow (copies your Fomo traders)", "momentum": "Momentum (day-trader style)", "survivor": "Survivor (4h+ coins climbing steadily)", "moonshot": "Moonshot Hunter ($20 bets on early 10x signs)",
+         "x_all40": "Test: sell all at +40%", "x_trail10": "Test: tighter lock (10% trail)", "x_skip35": "Test: stricter rug skip (35%)"}
 
 
 def _closed(con, since_ms=None, strategy=None):
@@ -85,6 +86,30 @@ def period_text(con, hours=24, header=True):
     return "\n".join(out)
 
 
+def experiments_text(con):
+    """Main vs its silent test copies, side by side (since each copy started)."""
+    names = ["main"] + list(config.SHADOW_PRESETS)
+    rows = []
+    start = None
+    for n in config.SHADOW_PRESETS:
+        r = con.execute("SELECT MIN(opened_at) t FROM trades WHERE mode='live' AND run_id=?", (n,)).fetchone()
+        if r and r["t"]:
+            start = r["t"] if start is None else min(start, r["t"])
+    L = ["🧪 <b>Experiments</b> (paper, no alerts)" + (" since %s" % datetime.fromtimestamp(start / 1000, TZ).strftime("%b %-d %-I:%M %p") if start else "")]
+    if not start:
+        L.append("No experiment trades yet. They trade the same coins as Main, so they start when Main finds its next coin.")
+        return "\n".join(L)
+    for n in names:
+        s = summarize(_closed(con, start, n))
+        if not s.get("trades"):
+            L.append("%s: no closed trades yet" % LABEL.get(n, n))
+            continue
+        L.append("%s: %d trades · %.0f%% win · %s (%s a trade)" % (LABEL.get(n, n).replace("Main (strict rules)", "Main (as set)"), s["trades"],
+                 s["win_rate"], money(s["total_pnl"]), money(s["avg_pnl"])))
+    L.append("Same coins, different exits. After about a week, the best one becomes Main.")
+    return "\n".join(L)
+
+
 def status_text(con, strats=None):
     now = int(time.time() * 1000)
     last = con.execute("SELECT v FROM kv WHERE k='last_poll'").fetchone()
@@ -110,7 +135,7 @@ def status_text(con, strats=None):
         fd = con.execute("SELECT v FROM kv WHERE k='fomo_feed_delay'").fetchone()
         lines.append("Fomo feed: %s%s" % ("last trade %ds ago" % ((now - int(fl["v"])) // 1000) if fl else "waiting for first trade",
                                           " (%ss delay)" % fd["v"] if fd and fd["v"] not in ("0", "0.0") else ""))
-    rows = con.execute("SELECT * FROM trades WHERE mode='live' AND closed_at IS NULL ORDER BY opened_at").fetchall()
+    rows = [r for r in con.execute("SELECT * FROM trades WHERE mode='live' AND closed_at IS NULL ORDER BY opened_at").fetchall() if (r['run_id'] or 'main') not in config.SHADOW]
     if rows:
         lines.append("\n<b>Open paper trades</b>")
         for r in rows:
