@@ -106,7 +106,7 @@ STRATEGY_DEFAULTS = {
 
 PRESETS = {
     # the strict rules; sends Telegram alerts
-    "main": {},
+    "main": {"TAKE_HALF_X": 1.4},   # Oct 1: bank half at +40% (winners were giving back their spikes); /test re-checks nightly
     # looser rules on the same coins; trades silently so it reaches 100 trades faster
     "wide": {
         "MIN_AGE_MIN": 10, "MIN_RUNUP_X": 1.3, "PULLBACK_MIN_PCT": 10, "PULLBACK_MAX_PCT": 45,

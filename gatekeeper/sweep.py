@@ -52,7 +52,7 @@ VARIANTS = [
     ("Survivor + rug score + stop waits 60s to confirm", {"STOP_CONFIRM_SEC": 60}, "survivor", True),
     ("Survivor + rug score + wider stop (-25%)", {"STOP_LOSS_PCT": 25}, "survivor", True),
     ("Survivor + rug score + no heavy-selling exit", {"SELL_PRESSURE_EXIT": 0}, "survivor", True),
-    ("Current Main + rug score (skip 45%+)", {}, "main", True),
+    ("Current Main + rug score (skip 45%+, half at +40%)", {}, "main", True),
     ("Main + rug score, skip 60%+ (the old setting)", {"RISK_SKIP": 60}, "main", True),
     # --- the winner, loosened to find more trades (it only made 7 in 5 days) ---
     ("Main + rug score, 60+ min old", {"MIN_AGE_MIN": 60}, "main", True),
@@ -62,7 +62,7 @@ VARIANTS = [
     ("Main + rug score, top 10 at 25%", {"MAX_TOP10_PCT": 25}, "main", True),
     ("Main + rug score, skip 35%+", {"RISK_SKIP": 35}, "main", True),
     # --- winners give back too much: bank part of the spike instead of trailing it ---
-    ("Main + rug score, sell half at +40%", {"TAKE_HALF_X": 1.4}, "main", True),
+    ("Main + rug score, sell half at 2x (the old setting)", {"TAKE_HALF_X": 2.0}, "main", True),
     ("Main + rug score, sell half at +60%", {"TAKE_HALF_X": 1.6}, "main", True),
     ("Main + rug score, sell all at +40%", {"TAKE_PROFIT_PCT": 40}, "main", True),
     ("Main + rug score, sell all at +60%", {"TAKE_PROFIT_PCT": 60}, "main", True),
