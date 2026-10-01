@@ -44,6 +44,10 @@ def build(r, con=None, trench_text=None):
         except Exception as e:  # noqa: BLE001
             parts[name] = "(unavailable: %s)" % str(e)[:120]
 
+    keys = ("MIN_AGE_MIN", "MAX_AGE_MIN", "MIN_LIQ_USD", "MAX_TOP10_PCT", "RISK_SKIP", "INSIDER_SKIP", "TAKE_HALF_X",
+            "TAKE_PROFIT_PCT", "STOP_LOSS_PCT", "LOCK_START_PCT", "LOCK_TRAIL_PCT", "BREAKEVEN_AT_PCT", "POSITION_USD")
+    safe("settings", lambda: "\n".join("%s: %s" % (n, ", ".join("%s=%g" % (k, st.p[k]) for k in keys if k in st.p))
+                                       for n, st in r.strats.items()))
     safe("status", lambda: report.status_text(con, r.strats))
     safe("today", lambda: report.period_text(con, hours=24))
     safe("week", lambda: report.period_text(con, hours=24 * 7))
@@ -66,7 +70,7 @@ def build(r, con=None, trench_text=None):
     data = {"generated": int(time.time() * 1000), "generated_local": now.strftime("%Y-%m-%d %H:%M %Z"),
             "strategies": list(r.strats), "epochs": getattr(r, "epochs", {}), "open": open_, "closed_recent": closed,
             "rug_model": {k: v for k, v in (r.rug_model or {}).items() if k != "counts"}, "reports": parts}
-    order = ["status", "today", "week", "exits", "risk", "moonshots", "traders", "trench", "research", "trends", "events"]
+    order = ["settings", "status", "today", "week", "exits", "risk", "moonshots", "traders", "trench", "research", "trends", "events"]
     md = ["# Gatekeeper stats: %s" % data["generated_local"], "",
           "Open paper trades: %d · strategies: %s" % (len(open_), ", ".join(r.strats)), ""]
     for k in order:
