@@ -13,13 +13,14 @@ PROTECT = {"LOCK_START_PCT": 20, "LOCK_TRAIL_PCT": 20, "BREAKEVEN_AT_PCT": 25, "
 
 VARIANTS = [
     ("Current Main rules without the rug score (reference)", {}),
-    ("Current Main + rug score (skip 45%+, half at +40%)", {}, "main", True),
+    ("Current Main + rug score (as set now)", {}, "main", True),
     ("Main + rug score, skip 60%+ (the old setting)", {"RISK_SKIP": 60}, "main", True),
     # --- the winner, loosened to find more trades (it only made 7 in 5 days) ---
     ("Main + rug score, 60+ min old", {"MIN_AGE_MIN": 60}, "main", True),
     ("Main + rug score, 90+ min old", {"MIN_AGE_MIN": 90}, "main", True),
     ("Main + rug score, up to 24h old", {"MAX_AGE_MIN": 1440}, "main", True),
-    ("Main + rug score, pool $20K+", {"MIN_LIQ_USD": 20000}, "main", True),
+    ("Main + rug score, pool $30K+ (the old setting)", {"MIN_LIQ_USD": 30000}, "main", True),
+    ("Main + rug score, pool $15K+", {"MIN_LIQ_USD": 15000}, "main", True),
     ("Main + rug score, top 10 at 25%", {"MAX_TOP10_PCT": 25}, "main", True),
     ("Main + rug score, skip 35%+", {"RISK_SKIP": 35}, "main", True),
     # --- winners give back too much: bank part of the spike instead of trailing it ---
@@ -29,6 +30,9 @@ VARIANTS = [
     ("Main + rug score, sell all at +60%", {"TAKE_PROFIT_PCT": 60}, "main", True),
     ("Main + rug score, tighter lock (trail 10% once up 20%)", {"LOCK_TRAIL_PCT": 10}, "main", True),
     ("Main + rug score, half at +40% then trail 10%", {"TAKE_HALF_X": 1.4, "LOCK_TRAIL_PCT": 10}, "main", True),
+    # --- combos of Oct 1's winners ---
+    ("Main + rug score, skip 35%+ and sell all at +40%", {"RISK_SKIP": 35, "TAKE_PROFIT_PCT": 40}, "main", True),
+    ("Main + rug score, skip 35%+ and trail 10%", {"RISK_SKIP": 35, "LOCK_TRAIL_PCT": 10}, "main", True),
 ]
 
 
