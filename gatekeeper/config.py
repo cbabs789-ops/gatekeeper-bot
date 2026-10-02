@@ -93,7 +93,7 @@ STRATEGY_DEFAULTS = {
     "RISK_SKIP": 45,                # don't buy if the rug-risk score is this high or more (100 = never skip)
     "RISK_SIZING": 1,               # 1 = bet less on riskier coins (under 20%: full size, 20-35%: 75%, 35-50%: 50%, 50%+: 30%)
     "ADAPTIVE_TARGETS": 1,          # 1 = profit target per trade picked from data for its rug-risk level (updates hourly)
-    "INSIDER_SKIP": 1,              # skip coins this many known insider (trench) wallets have bought (0 = off)
+    "INSIDER_SKIP": 2,              # skip coins this many known insider (trench) wallets have bought (0 = off)
     "STOP_CONFIRM_SEC": 0,          # stop loss only fires if price stays below it this long (0 = immediately)
     # --- survivor entries (ENTRY_MODE "survivor"): coins that lived through the dangerous hours ---
     "SURV_MIN_PCT": 5,              # price up at least this much over the last hour (a steady climb)
@@ -144,9 +144,10 @@ SHADOW = {
     "x_all40": {"TAKE_PROFIT_PCT": 40},       # sell everything at +40%
     "x_trail10": {"LOCK_TRAIL_PCT": 10},      # tighter profit lock (10% trail once up 20%)
     "x_skip35": {"RISK_SKIP": 35},            # stricter rug skip
+    "x_insider1": {"INSIDER_SKIP": 1},        # the strict version: skip a coin if even one insider wallet bought it
     "x_noinsider": {"INSIDER_SKIP": 0},       # buys the coins the insider rule skips, to measure what that rule costs or saves
 }
-SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_all40,x_trail10,x_skip35,x_noinsider").split(",") if x.strip() in SHADOW]
+SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_all40,x_trail10,x_skip35,x_insider1,x_noinsider").split(",") if x.strip() in SHADOW]
 ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main,wide,follow").split(",") if x.strip()]
 ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,follow,survivor").split(",") if x.strip() in PRESETS]
 
