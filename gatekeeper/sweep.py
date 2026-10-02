@@ -26,6 +26,9 @@ VARIANTS = [
     # --- winners give back too much: bank part of the spike instead of trailing it ---
     ("Main + rug score, sell half at 2x (the old setting)", {"TAKE_HALF_X": 2.0}, "main", True),
     ("Main + rug score, sell half at +60%", {"TAKE_HALF_X": 1.6}, "main", True),
+    ("Main + rug score, quick scalp: sell all at +15%", {"TAKE_PROFIT_PCT": 15}, "main", True),
+    ("Main + rug score, quick scalp: sell all at +20%", {"TAKE_PROFIT_PCT": 20}, "main", True),
+    ("Main + rug score, quick scalp: sell all at +30%", {"TAKE_PROFIT_PCT": 30}, "main", True),
     ("Main + rug score, sell all at +40%", {"TAKE_PROFIT_PCT": 40}, "main", True),
     ("Main + rug score, sell all at +60%", {"TAKE_PROFIT_PCT": 60}, "main", True),
     ("Main + rug score, tighter lock (trail 10% once up 20%)", {"LOCK_TRAIL_PCT": 10}, "main", True),

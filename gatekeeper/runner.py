@@ -19,7 +19,7 @@ from .strategy import MIN, PaperBroker, Position, Strategy
 log = logging.getLogger("gatekeeper")
 TZ = ZoneInfo(config.TIMEZONE)
 POLL_SEC = 30
-FAST_SEC = int(float(config.os.environ.get("GK_FAST_SEC", "10")))
+FAST_SEC = float(config.os.environ.get("GK_FAST_SEC", "5"))   # how often open paper trades are re-priced
 
 
 def safety_worse(old, new):
@@ -309,7 +309,7 @@ class Runner:
         db.kv_set(self.con, "watching", len(mints))
 
     async def fast_loop(self):
-        """Price coins with open paper trades every 10 seconds, so exits and live P/L are sharper."""
+        """Price coins with open paper trades every 5 seconds, so exits and live P/L are sharper."""
         while True:
             await asyncio.sleep(FAST_SEC)
             try:
