@@ -158,8 +158,13 @@ SHADOW = {
     # again after it pays, and bets 1.5x on the win score's top picks once that model is trusted.
     "x_aggro": {"MAX_AGE_MIN": 1440, "MAX_OPEN": 10, "TAKE_PROFIT_PCT": 30, "LOCK_TRAIL_PCT": 10, "MAX_HOLD_MIN": 240,
                 "WIN_BOOST": 1},          # buying a coin again after a win cut profit in the 7-day test, so it is off
+    # swing: buys coins that already survived a full day with a big pool and are climbing steadily, then holds for
+    # days. No profit target: sells half at 2x and trails the rest, with a wide lock once it is up 30%. Up to 7 days.
+    "x_swing": {"ENTRY_MODE": "survivor", "MIN_AGE_MIN": 1440, "MAX_AGE_MIN": 2880, "MIN_LIQ_USD": 50000, "LIQ_HOLD_PCT": 95,
+                "TAKE_PROFIT_PCT": 0, "TAKE_HALF_X": 2.0, "TRAIL_PCT": 35, "LOCK_START_PCT": 30, "LOCK_TRAIL_PCT": 30,
+                "BREAKEVEN_AT_PCT": 40, "MAX_HOLD_MIN": 10080, "ADAPTIVE_TARGETS": 0},
 }
-SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_aggro,x_scalp20,x_scalp30,x_all40,x_trail10,x_insider1,x_noinsider,x_winscore").split(",") if x.strip() in SHADOW]
+SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_aggro,x_swing,x_all40,x_insider1,x_noinsider,x_winscore").split(",") if x.strip() in SHADOW]
 ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main,wide,follow").split(",") if x.strip()]
 ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,follow,survivor").split(",") if x.strip() in PRESETS]
 
