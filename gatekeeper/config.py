@@ -144,8 +144,9 @@ SHADOW = {
     "x_all40": {"TAKE_PROFIT_PCT": 40},       # sell everything at +40%
     "x_trail10": {"LOCK_TRAIL_PCT": 10},      # tighter profit lock (10% trail once up 20%)
     "x_skip35": {"RISK_SKIP": 35},            # stricter rug skip
+    "x_noinsider": {"INSIDER_SKIP": 0},       # buys the coins the insider rule skips, to measure what that rule costs or saves
 }
-SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_all40,x_trail10,x_skip35").split(",") if x.strip() in SHADOW]
+SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_all40,x_trail10,x_skip35,x_noinsider").split(",") if x.strip() in SHADOW]
 ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main,wide,follow").split(",") if x.strip()]
 ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,follow,survivor").split(",") if x.strip() in PRESETS]
 
