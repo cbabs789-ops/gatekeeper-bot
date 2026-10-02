@@ -667,12 +667,27 @@ class Runner:
         await notify.send(self.session, "🧪 Testing %d rule variations on the last %s of recorded coins. Big tests take 30 to 60 minutes; I'll post progress. "
                           "Alerts keep working, but updating or restarting the bot cancels the test." % (
                               len(sweep.VARIANTS), "day" if days == 1 else "%g days" % days))
-        loop = asyncio.get_running_loop()
-        def progress(pc):
-            if pc < 100:
-                asyncio.run_coroutine_threadsafe(notify.send(self.session, "🧪 Rule test %d%% done..." % pc), loop)
         try:
-            res = await asyncio.to_thread(sweep.run, days, progress)
+            # its own low-priority process: the live bot keeps its speed, and each progress step keeps updates away
+            import sys
+            proc = await asyncio.create_subprocess_exec(
+                "nice", "-n", "10", sys.executable, "-m", "gatekeeper", "sweep-worker", "--days", str(days),
+                stdout=asyncio.subprocess.PIPE, limit=16 * 1024 * 1024)
+            res, got = None, False
+            async for line in proc.stdout:
+                try:
+                    m = json.loads(line)
+                except ValueError:
+                    continue
+                if "p" in m:
+                    db.kv_set(self.con, "busy_until", now_ms() + 2 * 3600 * 1000)
+                    if m["p"] < 100:
+                        await notify.send(self.session, "🧪 Rule test %d%% done..." % m["p"])
+                elif "res" in m:
+                    res, got = m["res"], True
+            await proc.wait()
+            if not got:
+                raise RuntimeError("the test stopped early (exit code %s)" % proc.returncode)
             await notify.send(self.session, sweep.text(res))
         except Exception as e:  # noqa: BLE001
             log.exception("Sweep failed")

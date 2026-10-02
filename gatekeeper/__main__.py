@@ -121,6 +121,8 @@ def main():
     b.add_argument("--strategy", default="main", choices=sorted(config.PRESETS))
     sub.add_parser("setup-telegram")
     sub.add_parser("settings")
+    swk = sub.add_parser("sweep-worker")
+    swk.add_argument("--days", type=float, default=7)
     sw = sub.add_parser("sweep")
     sw.add_argument("--days", type=float, default=7)
     sub.add_parser("busy")
@@ -143,6 +145,12 @@ def main():
         cmd_backtest(a)
     elif a.cmd == "setup-telegram":
         sys.exit(asyncio.run(_setup_telegram()))
+    elif a.cmd == "sweep-worker":
+        # run by the bot in its own process, so a rule test never slows the live bot down
+        import json
+        from . import sweep
+        res = sweep.run(a.days, progress=lambda pc: print(json.dumps({"p": pc}), flush=True))
+        print(json.dumps({"res": res}), flush=True)
     elif a.cmd == "sweep":
         from . import sweep
         print(plain(sweep.text(sweep.run(a.days, progress=lambda pc: print("  ...%d%% done" % pc, flush=True)))))
