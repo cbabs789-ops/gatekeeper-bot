@@ -95,8 +95,17 @@ class Strategy:
         self.traded = set()
         self.closed = []                     # finished Position objects
         self.risk_model = None               # rug-risk model (set by the runner and the rule test)
+        self.win_model = None                # win-score model (chance of +40% before -30%), set by the runner
         self.insider_lookup = None           # mint -> number of known insider (trench) wallets that bought it (live only)
         self.on_skip = None                  # called when a coin is skipped for insiders, so the skip can be graded later
+
+    def win_score(self, cs):
+        """Learned chance (0-100) this coin reaches +40% before -30%, or None if the model isn't built."""
+        if not self.win_model or not self.win_model.get("counts") or not cs.last_snap:
+            return None
+        from . import risk, winmodel
+        age = (cs.last_ts - cs.graduated_at) / MIN
+        return winmodel.score(self.win_model, risk.live_row(cs.last_snap, self.safety_lookup(cs.mint), cs.socials, age))
 
     def insider_skip(self, cs):
         """True if known insider wallets are in this coin (they rug 94-100% of the time). Logs the skip."""
@@ -342,6 +351,12 @@ class Strategy:
             return None
         if self.insider_skip(cs):
             return None
+        ws = self.win_score(cs)
+        if ws is not None:
+            why.append("win score %d of 100" % ws)
+            if self.p.get("WIN_FILTER") and self.win_model.get("trusted") and ws < (self.win_model.get("cut") or 0):
+                self.traded.add(cs.mint)      # the model rates this one below its top 40%: skip
+                return None
         rk, usd = self.risk_and_size(cs)
         if not usd:
             self.traded.add(cs.mint)          # too risky: skip this coin for good
