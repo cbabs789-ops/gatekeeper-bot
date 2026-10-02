@@ -33,6 +33,9 @@ VARIANTS = [
     ("Main + rug score, sell all at +60%", {"TAKE_PROFIT_PCT": 60}, "main", True),
     ("Main + rug score, tighter lock (trail 10% once up 20%)", {"LOCK_TRAIL_PCT": 10}, "main", True),
     ("Main + rug score, half at +40% then trail 10%", {"TAKE_HALF_X": 1.4, "LOCK_TRAIL_PCT": 10}, "main", True),
+    ("Smart aggressive (up to 24h old, sell all +30%, 10% trail, buys winners again)",
+     {"MAX_AGE_MIN": 1440, "TAKE_PROFIT_PCT": 30, "LOCK_TRAIL_PCT": 10, "MAX_HOLD_MIN": 240, "REENTER_MIN": 20, "REENTER_MAX": 2}, "main", True),
+    ("Smart aggressive without buying again", {"MAX_AGE_MIN": 1440, "TAKE_PROFIT_PCT": 30, "LOCK_TRAIL_PCT": 10, "MAX_HOLD_MIN": 240}, "main", True),
     # --- combos of Oct 1's winners ---
     ("Main + rug score, skip 35%+ and sell all at +40%", {"RISK_SKIP": 35, "TAKE_PROFIT_PCT": 40}, "main", True),
     ("Main + rug score, skip 35%+ and trail 10%", {"RISK_SKIP": 35, "LOCK_TRAIL_PCT": 10}, "main", True),

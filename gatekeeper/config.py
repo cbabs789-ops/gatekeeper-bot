@@ -94,6 +94,9 @@ STRATEGY_DEFAULTS = {
     "RISK_SIZING": 1,               # 1 = bet less on riskier coins (under 20%: full size, 20-35%: 75%, 35-50%: 50%, 50%+: 30%)
     "ADAPTIVE_TARGETS": 1,          # 1 = profit target per trade picked from data for its rug-risk level (updates hourly)
     "INSIDER_SKIP": 2,              # skip coins this many known insider (trench) wallets have bought (0 = off)
+    "WIN_BOOST": 0,                 # 1 = bet 1.5x on coins in the win score's top 40% (only once the model is trusted)
+    "REENTER_MIN": 0,               # buy a coin again this many minutes after a winning trade in it, if it sets up again (0 = never)
+    "REENTER_MAX": 2,               # ...at most this many times per coin
     "WIN_FILTER": 0,                # 1 = only buy coins whose win score is in the top 40% (only once the model is trusted)
     "STOP_CONFIRM_SEC": 0,          # stop loss only fires if price stays below it this long (0 = immediately)
     # --- survivor entries (ENTRY_MODE "survivor"): coins that lived through the dangerous hours ---
@@ -149,9 +152,14 @@ SHADOW = {
     "x_scalp30": {"TAKE_PROFIT_PCT": 30},     # quick scalp: sell everything at +30%
     "x_insider1": {"INSIDER_SKIP": 1},        # the strict version: skip a coin if even one insider wallet bought it
     "x_noinsider": {"INSIDER_SKIP": 0},
-    "x_winscore": {"WIN_FILTER": 1},          # only buys when the learned win score is in the top 40%       # buys the coins the insider rule skips, to measure what that rule costs or saves
+    "x_winscore": {"WIN_FILTER": 1},
+    # smart aggressive: every tested winner at once. Same strict safety and rug rules as Main, but it takes more
+    # setups (coins up to 24h old, up to 10 open), sells everything fast at +30% with a tight 10% trail, buys a coin
+    # again after it pays, and bets 1.5x on the win score's top picks once that model is trusted.
+    "x_aggro": {"MAX_AGE_MIN": 1440, "MAX_OPEN": 10, "TAKE_PROFIT_PCT": 30, "LOCK_TRAIL_PCT": 10, "MAX_HOLD_MIN": 240,
+                "REENTER_MIN": 20, "REENTER_MAX": 2, "WIN_BOOST": 1},          # only buys when the learned win score is in the top 40%       # buys the coins the insider rule skips, to measure what that rule costs or saves
 }
-SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_scalp20,x_scalp30,x_all40,x_trail10,x_insider1,x_noinsider,x_winscore").split(",") if x.strip() in SHADOW]
+SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_aggro,x_scalp20,x_scalp30,x_all40,x_trail10,x_insider1,x_noinsider,x_winscore").split(",") if x.strip() in SHADOW]
 ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main,wide,follow").split(",") if x.strip()]
 ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,follow,survivor").split(",") if x.strip() in PRESETS]
 

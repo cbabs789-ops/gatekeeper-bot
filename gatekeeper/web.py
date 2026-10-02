@@ -440,7 +440,7 @@ const t=ms=>{const d=new Date(ms);return d.toLocaleString([], {month:"short",day
 const mcf=v=>{if(!v)return null;if(v>=1e9)return "$"+(+(v/1e9).toFixed(2))+"B MC";if(v>=1e6)return "$"+(+(v/1e6).toFixed(2))+"M MC";
  if(v>=1e3)return "$"+(+(v/1e3).toFixed(v>=1e5?0:1))+"K MC";return "$"+Math.round(v)+" MC"};
 const dur=ms=>{const m=Math.round(ms/60000);return m<60?m+"m":Math.floor(m/60)+"h "+(m%60)+"m"};
-const NAMES={main:"Main",wide:"Wide",follow:"Follow",momentum:"Momentum",survivor:"Survivor",x_all40:"Sell all +40%",x_trail10:"Tight trail",x_skip35:"Rug skip 35%",x_noinsider:"No insider rule",x_insider1:"Strict insider rule",x_scalp20:"Scalp +20%",x_scalp30:"Scalp +30%",x_winscore:"Win score"};
+const NAMES={main:"Main",wide:"Wide",follow:"Follow",momentum:"Momentum",survivor:"Survivor",x_all40:"Sell all +40%",x_trail10:"Tight trail",x_skip35:"Rug skip 35%",x_noinsider:"No insider rule",x_insider1:"Strict insider rule",x_scalp20:"Scalp +20%",x_scalp30:"Scalp +30%",x_winscore:"Win score",x_aggro:"Smart aggressive"};
 function renderExp(X,s){if(!$("x-table"))return;const E=s.experiments||{rows:[]};
  $("x-table").replaceChildren(...(E.rows.length>1?[el("div","dim",E.since?"Compared since "+t(E.since)+" (the first experiment trade)":"Waiting for the first trade. They trade the same coins as Main.")].concat(E.rows.map(r=>{const d=el("div","item");const a=r.stats;const w=el("div");w.append(el("b",null,r.label));if(r.name==="main")w.append(el("span","tag","live strategy"));
   d.append(w,el("b",cls(a.pnl),sgn(a.pnl)));d.append(el("div","sub",a.trades+" trades · "+a.win_rate+"% win · "+(a.trades?sgn(a.pnl/a.trades)+" a trade":"no trades yet")+" · open now "+r.open));return d})):[el("div","empty","Experiments start with the next update.")]));

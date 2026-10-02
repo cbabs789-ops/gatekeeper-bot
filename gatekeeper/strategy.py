@@ -93,6 +93,8 @@ class Strategy:
         self.coins = {}
         self.positions = {}
         self.traded = set()
+        self.rebuy = {}                      # mint -> when its last winning trade closed (REENTER_MIN lets it buy again)
+        self.reentries = {}                  # mint -> how many times it has been bought again
         self.closed = []                     # finished Position objects
         self.risk_model = None               # rug-risk model (set by the runner and the rule test)
         self.win_model = None                # win-score model (chance of +40% before -30%), set by the runner
@@ -344,11 +346,20 @@ class Strategy:
     def _maybe_enter(self, cs, s):
         if self.p.get("ENTRY_MODE") == "signal":
             return None
-        if cs.mint in self.traded or len(self.positions) >= self.p["MAX_OPEN"]:
+        if len(self.positions) >= self.p["MAX_OPEN"]:
             return None
+        again = False
+        if cs.mint in self.traded:
+            # a coin that already paid can be bought again after a cooldown, if it sets up again (REENTER_MIN)
+            t = self.rebuy.get(cs.mint)
+            if not t or not self.p.get("REENTER_MIN") or s["ts"] - t < self.p["REENTER_MIN"] * MIN:
+                return None
+            again = True
         ok, why, _ = self.entry_check(cs, s)
         if not ok:
             return None
+        if again:
+            why.append("buying again after a winning trade")
         if self.insider_skip(cs):
             return None
         ws = self.win_score(cs)
@@ -361,6 +372,12 @@ class Strategy:
         if not usd:
             self.traded.add(cs.mint)          # too risky: skip this coin for good
             return None
+        if self.p.get("WIN_BOOST") and ws is not None and self.win_model.get("trusted") and ws >= (self.win_model.get("cut") or 101):
+            usd = round(usd * 1.5, 2)         # the model's top picks get a bigger bet
+            why.append("bigger bet: high win score")
+        if again:
+            self.rebuy.pop(cs.mint, None)
+            self.reentries[cs.mint] = self.reentries.get(cs.mint, 0) + 1
         qty, fill = self.broker.buy(s["price"], s["liq"], usd)
         pos = Position(cs.mint, cs.symbol, s["ts"], fill, s["price"], usd, qty, qty, peak_after=s["price"], why="; ".join(why))
         pos.risk = rk
@@ -461,6 +478,8 @@ class Strategy:
         pos.pnl_usd = pos.proceeds - pos.size_usd
         pos.pnl_pct = pos.pnl_usd / pos.size_usd * 100
         self.positions.pop(pos.mint, None)
+        if self.p.get("REENTER_MIN") and pos.pnl_usd > 0 and self.reentries.get(pos.mint, 0) < self.p.get("REENTER_MAX", 2):
+            self.rebuy[pos.mint] = ts
         self.closed.append(pos)
         return [{"type": "close", "pos": pos, "spot": price, "reason": reason}]
 
