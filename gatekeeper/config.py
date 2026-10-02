@@ -157,7 +157,7 @@ SHADOW = {
     # setups (coins up to 24h old, up to 10 open), sells everything fast at +30% with a tight 10% trail, buys a coin
     # again after it pays, and bets 1.5x on the win score's top picks once that model is trusted.
     "x_aggro": {"MAX_AGE_MIN": 1440, "MAX_OPEN": 10, "TAKE_PROFIT_PCT": 30, "LOCK_TRAIL_PCT": 10, "MAX_HOLD_MIN": 240,
-                "REENTER_MIN": 20, "REENTER_MAX": 2, "WIN_BOOST": 1},          # only buys when the learned win score is in the top 40%       # buys the coins the insider rule skips, to measure what that rule costs or saves
+                "WIN_BOOST": 1},          # buying a coin again after a win cut profit in the 7-day test, so it is off
 }
 SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_aggro,x_scalp20,x_scalp30,x_all40,x_trail10,x_insider1,x_noinsider,x_winscore").split(",") if x.strip() in SHADOW]
 ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main,wide,follow").split(",") if x.strip()]
