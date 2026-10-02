@@ -161,7 +161,7 @@ def state(runner):
         {"name": n, "label": report.LABEL.get(n, n).replace("Test: ", "").replace("Main (strict rules)", "Main (as set)"),
          "stats": _stats(report._closed(con, since_ms=x0, strategy=n)) if x0 else _stats([]),
          "open": len(runner.strats[n].positions)} for n in ["main"] + xs if n in runner.strats]}
-    for r in con.execute("SELECT * FROM trades WHERE mode='live' AND closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 120"):
+    for r in con.execute("SELECT * FROM trades WHERE mode='live' AND closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 400"):
         try:
             lg = json.loads(r["legs"] or "[]")
         except ValueError:
@@ -369,6 +369,7 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 .legend i{display:inline-block;width:12px;height:0;border-top:2px dashed;vertical-align:middle;margin-right:4px}
 .tabs{display:flex;gap:8px;margin:14px 0 4px}.tabs button{flex:1;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit;font-weight:600;cursor:pointer}
 .tabs button.on{border-color:var(--acc);color:var(--acc)}
+#x-pick button{flex:1 1 30%;font-size:13px;padding:8px}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
 .coin{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
 .coin .hdr{height:70px;background:#0b0f14 center/cover no-repeat}
@@ -391,8 +392,9 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 <div id="tab-exp" hidden>
 <p class="dim">Copies of Main with one thing changed, trading the same coins silently on paper. No alerts, and they never count toward Main's results. After about a week, the best one becomes Main.</p>
 <h2>Head to head</h2><div class="list" id="x-table"></div>
-<h2>Open experiment trades</h2><div class="list" id="x-open"></div>
-<h2>Closed experiment trades</h2><div class="list" id="x-closed"></div>
+<h2>Pick a bot to see its trades</h2><nav class="tabs" id="x-pick" style="flex-wrap:wrap"></nav>
+<h2>Open trades <span class="dim" style="text-transform:none;letter-spacing:0">(value if sold right now, after fees and slippage)</span></h2><div class="list" id="x-open"></div>
+<h2>Closed trades <span class="dim" style="text-transform:none;letter-spacing:0">(tap one for its chart)</span></h2><div class="list" id="x-closed"></div>
 </div>
 <div id="tab-events" hidden>
 <p class="dim">Speeches, summits, signings and announcements found in the news before they happen, with the coins most likely to move. Checked every 30 minutes. Ideas to watch, not buy signals: news coins often pump before the event and dump right after.</p>
@@ -444,8 +446,11 @@ const NAMES={main:"Main",wide:"Wide",follow:"Follow",momentum:"Momentum",survivo
 function renderExp(X,s){if(!$("x-table"))return;const E=s.experiments||{rows:[]};
  $("x-table").replaceChildren(...(E.rows.length>1?[el("div","dim",E.since?"Compared since "+t(E.since)+" (the first experiment trade)":"Waiting for the first trade. They trade the same coins as Main.")].concat(E.rows.map(r=>{const d=el("div","item");const a=r.stats;const w=el("div");w.append(el("b",null,r.label));if(r.name==="main")w.append(el("span","tag","live strategy"));
   d.append(w,el("b",cls(a.pnl),sgn(a.pnl)));d.append(el("div","sub",a.trades+" trades · "+a.win_rate+"% win · "+(a.trades?sgn(a.pnl/a.trades)+" a trade":"no trades yet")+" · open now "+r.open));return d})):[el("div","empty","Experiments start with the next update.")]));
- $("x-open").replaceChildren(...(X.open.length?X.open.map(p=>{const d=el("div","item");const w=el("div");w.append(link("$"+p.symbol,p.link),el("span","tag",NAMES[p.strategy]||p.strategy));d.append(w,el("b",cls(p.pnl),sgn(p.pnl)+" ("+pct(p.pnl_pct)+")"));d.append(el("div","sub","held "+dur(s.now-p.opened_at)+(p.took_half?" · sold half":"")));return d}):[el("div","empty","None open.")]));
- $("x-closed").replaceChildren(...(X.closed.length?X.closed.slice(0,40).map(c=>{const d=el("div","item");const w=el("div");w.append(link("$"+c.symbol,c.link),el("span","tag",NAMES[c.strategy]||c.strategy));d.append(w,el("b",cls(c.pnl),sgn(c.pnl)+" ("+pct(c.pnl_pct)+")"));d.append(el("div","sub",t(c.closed_at)+" · "+(c.exit||"")));return d}):[el("div","empty","No closed experiment trades yet. They trade the same coins as Main, so they start when Main finds its next coin.")]))}
+ const names=X.strategies.map(x=>x.name);if(names.length&&!names.includes(XBOT))XBOT=names[0];
+ $("x-pick").replaceChildren(...X.strategies.map(x=>{const b=el("button",x.name===XBOT?"on":"",NAMES[x.name]||x.name);b.onclick=()=>{XBOT=x.name;load()};return b}));
+ const xo=X.open.filter(p=>p.strategy===XBOT).sort((a,b)=>b.opened_at-a.opened_at),xc=X.closed.filter(c=>c.strategy===XBOT);
+ $("x-open").replaceChildren(...(xo.length?xo.map(p=>openCard(p,s)):[el("div","empty","No open trades for this bot.")]));
+ $("x-closed").replaceChildren(...(xc.length?xc.slice(0,30).map(c=>closedCard(c)):[el("div","empty","No closed trades for this bot yet.")]))}
 function link(txt,href){if(!href)return el("span",null,txt);const a=el("a",null,txt);a.href=href;a.target="_blank";a.rel="noopener";return a}
 function spark(pts){const ns="http://www.w3.org/2000/svg",s=document.createElementNS(ns,"svg");s.setAttribute("viewBox","0 0 300 70");s.setAttribute("preserveAspectRatio","none");
  if(!pts||pts.length<2)return s;const ys=pts.map(p=>p[1]).concat([0]);const lo=Math.min(...ys),hi=Math.max(...ys),r=(hi-lo)||1;
@@ -482,7 +487,26 @@ function tradeLog(log){const box=el("div","tlog");(log||[]).forEach(g=>{const r=
 const OPEN_CHARTS={};
 async function toggleChart(item,id){if(OPEN_CHARTS[id]){delete OPEN_CHARTS[id];const c=item.querySelector(".chart");if(c)c.remove();const g=item.querySelector(".legend");if(g)g.remove();return}
  OPEN_CHARTS[id]="loading";try{const r=await fetch("api/chart?id="+id+"&k="+encodeURIComponent(K));OPEN_CHARTS[id]=await r.json();item.append(priceChart(OPEN_CHARTS[id]))}catch(_){delete OPEN_CHARTS[id]}}
-const SHADOW={};
+function openCard(p,s){const d=el("div","item");const n=link("$"+p.symbol,p.link);const w=el("div");w.append(n,el("span","tag",NAMES[p.strategy]||p.strategy));if(p.took_half)w.append(el("span","tag","sold half"));
+  d.append(w,el("b",cls(p.pnl),sgn(p.pnl)+" ("+pct(p.pnl_pct)+")"));
+  if(p.mc_in)d.append(el("div","sub","Bought at "+mcf(p.mc_in)+" · now "+(mcf(p.mc_now)||"?")));
+  if(p.risk!=null){const rk=el("div","sub","Rug risk at entry: "+Math.round(p.risk)+"%"+(p.risk>=50?" · will take a quick profit and leave":""));rk.style.color=p.risk>=50?"var(--down)":p.risk>=30?"var(--warn)":"var(--up)";d.append(rk)}
+  {const g=el("div","stats"),S=p.stats||{};const cell=(k,v,c)=>{const b=el("div","stat");b.append(el("div","k",k),el("div","v "+(c||""),v));g.append(b)};
+   const km=v=>v==null?"n/a":(v>=1e6?"$"+(v/1e6).toFixed(2)+"M":v>=1e3?"$"+(v/1e3).toFixed(1)+"K":"$"+Math.round(v));
+   cell("Market cap",(mcf(p.mc_now)||"n/a").replace(" MC",""));cell("Pool",km(p.liq));
+   cell("Volume 1h",km(S.vol_h1));cell("Volume 5m",km(S.vol_m5));
+   cell("Buys / sells 5m",(S.buys_m5??"?")+" / "+(S.sells_m5??"?"),(S.buys_m5||0)>=(S.sells_m5||0)?"up":"down");
+   cell("Buys / sells 1h",(S.buys_h1??"?")+" / "+(S.sells_h1??"?"),(S.buys_h1||0)>=(S.sells_h1||0)?"up":"down");
+   cell("Change 5m",S.pc_m5==null?"n/a":pct(S.pc_m5),cls(S.pc_m5||0));cell("Change 1h",S.pc_h1==null?"n/a":pct(S.pc_h1),cls(S.pc_h1||0));d.append(g)}
+  d.append(el("div","sub","Price "+pct(p.move_pct)+" since entry · held "+dur(s.now-p.opened_at)+" · pool "+money(p.liq).replace(".00","")+" · $"+p.size+" in, worth "+money(p.value_if_sold)+" if sold"));
+  if(p.why)d.append(el("div","sub","Why: "+p.why));if(p.chart)d.append(priceChart(p.chart));d.append(tradeLog(p.log));return d}
+function closedCard(c){const d=el("div","item");const w=el("div");w.append(link("$"+c.symbol,c.link),el("span","tag",NAMES[c.strategy]||c.strategy));
+  d.append(w,el("b",cls(c.pnl),sgn(c.pnl)+" ("+pct(c.pnl_pct)+")"));if(c.mc_in)d.append(el("div","sub","Bought at "+mcf(c.mc_in)+(c.mc_out?" → sold at "+mcf(c.mc_out):"")));
+  d.append(el("div","sub",t(c.closed_at)+" · held "+dur(c.closed_at-c.opened_at)+" · "+(c.exit||"")+" · tap for chart"));
+  d.append(tradeLog(c.log));
+  d.classList.add("tap");d.onclick=e=>{if(e.target.closest("a"))return;toggleChart(d,c.id)};
+  const cached=OPEN_CHARTS[c.id];if(cached&&cached!=="loading")d.append(priceChart(cached));return d}
+const SHADOW={};let XBOT="x_aggro";
 function render(s){
  s.strategies.forEach(x=>{if(x.shadow)SHADOW[x.name]=1});
  const X={strategies:s.strategies.filter(x=>x.shadow),open:s.open.filter(p=>SHADOW[p.strategy]),closed:s.closed.filter(c=>SHADOW[c.strategy])};
@@ -500,29 +524,12 @@ function render(s){
   if(x.since&&x.all.trades>x.current.trades)r("All time, incl. old rules",x.all.trades+" trades · "+sgn(x.all.pnl));r("Today",x.today.trades+" trades · "+sgn(x.today.pnl));r("Open now",x.open+" · "+sgn(x.unrealized));
   c.append(spark(s.equity[x.name]));return c}));
  const o=s.open.sort((a,b)=>b.opened_at-a.opened_at);
- $("open").replaceChildren(...(o.length?o.map(p=>{const d=el("div","item");const n=link("$"+p.symbol,p.link);const w=el("div");w.append(n,el("span","tag",NAMES[p.strategy]||p.strategy));if(p.took_half)w.append(el("span","tag","sold half"));
-  d.append(w,el("b",cls(p.pnl),sgn(p.pnl)+" ("+pct(p.pnl_pct)+")"));
-  if(p.mc_in)d.append(el("div","sub","Bought at "+mcf(p.mc_in)+" · now "+(mcf(p.mc_now)||"?")));
-  if(p.risk!=null){const rk=el("div","sub","Rug risk at entry: "+Math.round(p.risk)+"%"+(p.risk>=50?" · will take a quick profit and leave":""));rk.style.color=p.risk>=50?"var(--down)":p.risk>=30?"var(--warn)":"var(--up)";d.append(rk)}
-  {const g=el("div","stats"),S=p.stats||{};const cell=(k,v,c)=>{const b=el("div","stat");b.append(el("div","k",k),el("div","v "+(c||""),v));g.append(b)};
-   const km=v=>v==null?"n/a":(v>=1e6?"$"+(v/1e6).toFixed(2)+"M":v>=1e3?"$"+(v/1e3).toFixed(1)+"K":"$"+Math.round(v));
-   cell("Market cap",(mcf(p.mc_now)||"n/a").replace(" MC",""));cell("Pool",km(p.liq));
-   cell("Volume 1h",km(S.vol_h1));cell("Volume 5m",km(S.vol_m5));
-   cell("Buys / sells 5m",(S.buys_m5??"?")+" / "+(S.sells_m5??"?"),(S.buys_m5||0)>=(S.sells_m5||0)?"up":"down");
-   cell("Buys / sells 1h",(S.buys_h1??"?")+" / "+(S.sells_h1??"?"),(S.buys_h1||0)>=(S.sells_h1||0)?"up":"down");
-   cell("Change 5m",S.pc_m5==null?"n/a":pct(S.pc_m5),cls(S.pc_m5||0));cell("Change 1h",S.pc_h1==null?"n/a":pct(S.pc_h1),cls(S.pc_h1||0));d.append(g)}
-  d.append(el("div","sub","Price "+pct(p.move_pct)+" since entry · held "+dur(s.now-p.opened_at)+" · pool "+money(p.liq).replace(".00","")+" · $"+p.size+" in, worth "+money(p.value_if_sold)+" if sold"));
-  if(p.why)d.append(el("div","sub","Why: "+p.why));if(p.chart)d.append(priceChart(p.chart));d.append(tradeLog(p.log));return d}):[el("div","empty","No open trades. He's waiting for a setup.")]));
+ $("open").replaceChildren(...(o.length?o.map(p=>openCard(p,s)):[el("div","empty","No open trades. He's waiting for a setup.")]));
  $("activity").replaceChildren(...(s.activity.length?s.activity.map(a=>{const d=el("div","item");const w=el("div");const icon=a.side==="buy"?"🟢 Bought ":"🔴 Sold ";w.append(document.createTextNode(icon),link("$"+a.symbol,a.link),el("span","tag",NAMES[a.strategy]||a.strategy));
   d.append(w,el("span","dim",money(a.usd)));d.append(el("div","sub",t(a.ts)+(a.mc?" · at "+mcf(a.mc):"")+(a.why?" · "+a.why:"")));return d}):[el("div","empty","No trades in the last 3 days.")]));
  $("alerts").replaceChildren(...(s.alerts.length?s.alerts.map(a=>{const d=el("div","item");const w=el("div");w.append(document.createTextNode(a.kind==="cluster"?"🔵 Cluster ":"🔥 Trending "),link("$"+a.token,a.link));
   d.append(w,el("span","dim",t(a.ts)));return d}):[el("div","empty","No Fomo alerts yet.")]));
- $("closed").replaceChildren(...(s.closed.length?s.closed.map(c=>{const d=el("div","item");const w=el("div");w.append(link("$"+c.symbol,c.link),el("span","tag",NAMES[c.strategy]||c.strategy));
-  d.append(w,el("b",cls(c.pnl),sgn(c.pnl)+" ("+pct(c.pnl_pct)+")"));if(c.mc_in)d.append(el("div","sub","Bought at "+mcf(c.mc_in)+(c.mc_out?" → sold at "+mcf(c.mc_out):"")));
-  d.append(el("div","sub",t(c.closed_at)+" · held "+dur(c.closed_at-c.opened_at)+" · "+(c.exit||"")+" · tap for chart"));
-  d.append(tradeLog(c.log));
-  d.classList.add("tap");d.onclick=e=>{if(e.target.closest("a"))return;toggleChart(d,c.id)};
-  const cached=OPEN_CHARTS[c.id];if(cached&&cached!=="loading")d.append(priceChart(cached));return d}):[el("div","empty","No closed trades yet.")]));
+ $("closed").replaceChildren(...(s.closed.length?s.closed.map(c=>closedCard(c)):[el("div","empty","No closed trades yet.")]));
 }
 async function load(){try{const r=await fetch("api/state?k="+encodeURIComponent(K),{cache:"no-store"});if(!r.ok)throw new Error(r.status);render(await r.json())}
  catch(e){$("health").replaceChildren(el("span","dot bad"),document.createTextNode("Can't reach the bot ("+e.message+"). Retrying…"))}}
