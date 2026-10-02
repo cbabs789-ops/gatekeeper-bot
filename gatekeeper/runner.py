@@ -195,7 +195,9 @@ class Runner:
                     if "moonbag" in (leg.get("why") or ""):
                         pos.moon = True
             cs = strat.coins.get(r["mint"])
-            pos.peak_after = cs.peak_price if cs else pos.spot_at_entry
+            # the highest price SINCE WE BOUGHT, not the coin's all-time high (that made restarts fake a "was up 30%" and sell)
+            hi = self.con.execute("SELECT MAX(price) FROM snapshots WHERE mint=? AND ts>=?", (r["mint"], r["opened_at"])).fetchone()[0]
+            pos.peak_after = max(pos.spot_at_entry, hi or 0)
             m = re.search(r"rug risk (\d+)%", pos.why or "")
             pos.risk = float(m.group(1)) if m else None
             m = re.search(r"data target ([\d.]+)x", pos.why or "")
