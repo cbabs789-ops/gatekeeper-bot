@@ -12,7 +12,7 @@ import aiohttp
 import html
 import re
 
-from . import config, db, events, fomo, followtest, notify, report, research, risk, stats, sweep, trench, trends, web, winmodel
+from . import check, config, db, events, fomo, followtest, notify, report, research, risk, stats, sweep, trench, trends, web, winmodel
 from .sources import CHAINS, EVM_RE, SOL_RE, dexscreener_batch, pair_to_snapshot, pumpportal_stream, safety_check
 from .strategy import MIN, PaperBroker, Position, Strategy
 
@@ -681,6 +681,13 @@ class Runner:
             self.sweeping = False
             db.kv_set(self.con, "busy_until", 0)
 
+    async def run_check(self, arg):
+        try:
+            await notify.send(self.session, await check.run(self, arg))
+        except Exception as e:  # noqa: BLE001
+            log.exception("/check failed")
+            await notify.send(self.session, "🔎 Couldn't check that coin: %s" % html.escape(str(e)[:200]))
+
     async def run_scan(self):
         await notify.send(self.session, "🔎 Running the Fomo trend scan (about 40 traders, roughly 10,000 of your 250,000 monthly credits). Takes a minute or two.")
         try:
@@ -707,7 +714,12 @@ class Runner:
                         if not owner or (chat != str(notify.ROUTES["chat"]) and cmd != "/setup"):
                             continue
                     notify.REPLY.set((chat, msg.get("message_thread_id") if msg.get("is_topic_message") else None))
-                    if cmd == "/setup":
+                    text = (msg.get("text") or "").strip()
+                    if cmd in ("/check", "check", "/c"):
+                        asyncio.create_task(self.run_check(text.split(None, 1)[1] if len(text.split(None, 1)) > 1 else ""))
+                    elif not text.startswith("/") and len(text.split()) <= 2 and check.find_address(text)[0]:
+                        asyncio.create_task(self.run_check(text))      # a pasted contract address or coin link on its own
+                    elif cmd == "/setup":
                         await self.setup_topics(msg)
                     elif cmd == "/unsetup":
                         db.kv_set(self.con, "tg_group", "")
@@ -787,7 +799,7 @@ class Runner:
                             days = 7
                         asyncio.create_task(self.run_sweep(days))
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/events: upcoming speeches, summits and signings, and the coins that could move\n/experiments: how the test copies of Main are doing (sell all at +40%, tighter trail, stricter rug skip)\n/winscore: what the win-score model has learned (chance of +40% before -30%)\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early\n/publish: push a stats snapshot to GitHub now\n/setup: (send inside a Telegram group with Topics on) sort alerts into topics\n/unsetup: move alerts back to this private chat")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/check COIN: the bot's verdict on any coin (paste its contract address, a Fomo or DexScreener link, or $TICKER)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/events: upcoming speeches, summits and signings, and the coins that could move\n/experiments: how the test copies of Main are doing (sell all at +40%, tighter trail, stricter rug skip)\n/winscore: what the win-score model has learned (chance of +40% before -30%)\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early\n/publish: push a stats snapshot to GitHub now\n/setup: (send inside a Telegram group with Topics on) sort alerts into topics\n/unsetup: move alerts back to this private chat")
                     elif cmd.startswith("/"):
                         await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
                 notify.REPLY.set(None)
