@@ -162,7 +162,8 @@ SHADOW = {
     # days. No profit target: sells half at 2x and trails the rest, with a wide lock once it is up 30%. Up to 7 days.
     "x_swing": {"ENTRY_MODE": "survivor", "MIN_AGE_MIN": 1440, "MAX_AGE_MIN": 2880, "MIN_LIQ_USD": 50000, "LIQ_HOLD_PCT": 95,
                 "TAKE_PROFIT_PCT": 0, "TAKE_HALF_X": 2.0, "TRAIL_PCT": 35, "LOCK_START_PCT": 30, "LOCK_TRAIL_PCT": 30,
-                "BREAKEVEN_AT_PCT": 40, "MAX_HOLD_MIN": 10080, "ADAPTIVE_TARGETS": 0},
+                "BREAKEVEN_AT_PCT": 40, "MAX_HOLD_MIN": 10080, "ADAPTIVE_TARGETS": 0,
+                "SELL_PRESSURE_EXIT": 0},      # a 5-minute burst of selling is noise on a multi-day hold,
 }
 SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_aggro,x_swing,x_all40,x_insider1,x_noinsider,x_winscore").split(",") if x.strip() in SHADOW]
 ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main,wide,follow").split(",") if x.strip()]
