@@ -22,7 +22,8 @@ VARIANTS = [
     ("Main + rug score, pool $30K+ (the old setting)", {"MIN_LIQ_USD": 30000}, "main", True),
     ("Main + rug score, pool $15K+", {"MIN_LIQ_USD": 15000}, "main", True),
     ("Main + rug score, top 10 at 25%", {"MAX_TOP10_PCT": 25}, "main", True),
-    ("Main + rug score, skip 35%+", {"RISK_SKIP": 35}, "main", True),
+    ("Main + rug score, skip 45%+ (Main until Oct 4)", {"RISK_SKIP": 45}, "main", True),
+    ("Main + rug score, skip 25%+", {"RISK_SKIP": 25}, "main", True),
     # --- winners give back too much: bank part of the spike instead of trailing it ---
     ("Main + rug score, sell half at +40% (Main until Oct 2)", {"TAKE_PROFIT_PCT": 0}, "main", True),
     ("Main + rug score, sell half at 2x (the old setting)", {"TAKE_HALF_X": 2.0, "TAKE_PROFIT_PCT": 0}, "main", True),
