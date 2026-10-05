@@ -148,6 +148,8 @@ PRESETS = {
 SHADOW = {
     "x_all40": {"TAKE_PROFIT_PCT": 40},       # sell everything at +40%
     "x_trail10": {"LOCK_TRAIL_PCT": 10},      # tighter profit lock (10% trail once up 20%)
+    # best of: every change that beat Main in the Oct 5 test at once (Main already has skip 35%+ and sell all at +30%)
+    "x_best": {"STOP_LOSS_PCT": 40, "MIN_LIQ_USD": 15000},
     "x_stop40": {"STOP_LOSS_PCT": 40},        # wider stop: fewer shake-outs (best recent half in the Oct 4 test)
     "x_stopwait": {"STOP_CONFIRM_SEC": 180},  # stop only sells if price stays under it for 3 minutes
     "x_age60": {"MIN_AGE_MIN": 60},           # buys from 60 minutes old: more trades, strong recently, failed before
@@ -169,7 +171,7 @@ SHADOW = {
                 "BREAKEVEN_AT_PCT": 40, "MAX_HOLD_MIN": 10080, "ADAPTIVE_TARGETS": 0,
                 "SELL_PRESSURE_EXIT": 0},      # a 5-minute burst of selling is noise on a multi-day hold,
 }
-SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_stop40,x_stopwait,x_age60,x_insider1,x_noinsider,x_winscore").split(",") if x.strip() in SHADOW]
+SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_best,x_stop40,x_age60,x_insider1,x_winscore").split(",") if x.strip() in SHADOW]
 ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main,wide,follow").split(",") if x.strip()]
 ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,follow,survivor").split(",") if x.strip() in PRESETS]
 

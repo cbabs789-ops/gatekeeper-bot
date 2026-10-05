@@ -42,6 +42,7 @@ VARIANTS = [
     ("Main + rug score, stop loss at -40%", {"STOP_LOSS_PCT": 40}, "main", True),
     ("Main + rug score, stop waits 60 seconds before selling", {"STOP_CONFIRM_SEC": 60}, "main", True),
     ("Main + rug score, stop waits 3 minutes before selling", {"STOP_CONFIRM_SEC": 180}, "main", True),
+    ("Best of: stop loss at -40% and pool $15K+", {"STOP_LOSS_PCT": 40, "MIN_LIQ_USD": 15000}, "main", True),
     # --- combos of Oct 1's winners ---
     ("Main + rug score, skip 35%+ and sell all at +40%", {"RISK_SKIP": 35, "TAKE_PROFIT_PCT": 40}, "main", True),
     ("Main + rug score, skip 35%+ and trail 10%", {"RISK_SKIP": 35, "LOCK_TRAIL_PCT": 10}, "main", True),
