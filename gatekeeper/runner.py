@@ -12,7 +12,7 @@ import aiohttp
 import html
 import re
 
-from . import bounce, check, config, db, events, fomo, followtest, hold, notify, report, research, risk, stats, sweep, trench, trends, web, winmodel
+from . import analyst, bounce, check, config, db, events, fomo, followtest, hold, notify, report, research, risk, stats, sweep, trench, trends, web, winmodel
 from .sources import CHAINS, EVM_RE, SOL_RE, dexscreener_batch, pair_to_snapshot, pumpportal_stream, safety_check
 from .strategy import MIN, PaperBroker, Position, Strategy
 
@@ -66,6 +66,7 @@ class Runner:
             st.insider_lookup, st.on_skip = self.trench.insiders_in, self.trench.log_skip
         self.events = events.Events(self)
         self.hold = hold.Hold(self)
+        self.analyst = analyst.Analyst(self)
         self._load_routes()
         risk.ensure(self.con)
         self.rug_model = risk.load(self.con)
@@ -425,6 +426,8 @@ class Runner:
                 "VALUES('live',?,?,?,?,?,?,?,?,?)",
                 (name, pos.mint, pos.symbol, pos.opened_at, pos.entry_price, pos.size_usd, pos.qty_total, pos.why, json.dumps(pos.legs)))
             pos.trade_id = cur.lastrowid
+            if name == "main":                 # the AI trader gives its own verdict on everything Main buys
+                asyncio.create_task(self.analyst.on_main_buy(pos))
             if alert:
                 await notify.send(self.session, tag + notify.fmt_buy(pos, a["spot"], a["liq"], self.strats[name].p, self.supply(pos.mint)))
         elif a["type"] == "partial":
@@ -787,6 +790,12 @@ class Runner:
                         await notify.send(self.session, winmodel.report(self.con))
                     elif cmd in ("/experiments", "experiments", "/x"):
                         await notify.send(self.session, report.experiments_text(self.con))
+                    elif cmd in ("/ai", "ai", "/aitrader"):
+                        await notify.send(self.session, self.analyst.text())
+                    elif cmd in ("/pick", "pick"):
+                        async def _pick(arg=text.split(None, 1)[1] if len(text.split(None, 1)) > 1 else ""):
+                            await notify.send(self.session, await self.analyst.pick(arg))
+                        asyncio.create_task(_pick())
                     elif cmd in ("/hold", "hold", "/holdbot"):
                         await notify.send(self.session, self.hold.text())
                     elif cmd in ("/events", "events", "/speeches"):
@@ -825,7 +834,7 @@ class Runner:
                             days = 7
                         asyncio.create_task(self.run_sweep(days))
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/check COIN: the bot's verdict on any coin (paste its contract address, a Fomo or DexScreener link, or $TICKER)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/events: upcoming speeches, summits and signings, and the coins that could move\n/experiments: how the test copies of Main are doing (sell all at +40%, tighter trail, stricter rug skip)\n/winscore: what the win-score model has learned (chance of +40% before -30%)\n/hold: the Hold bot: $300 paper bets on established coins, held for days\n/bounce: can the bot tell a shake-out from a real dump when the stop loss hits\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early\n/publish: push a stats snapshot to GitHub now\n/setup: (send inside a Telegram group with Topics on) sort alerts into topics\n/unsetup: move alerts back to this private chat")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/check COIN: the bot's verdict on any coin (paste its contract address, a Fomo or DexScreener link, or $TICKER)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/events: upcoming speeches, summits and signings, and the coins that could move\n/experiments: how the test copies of Main are doing (sell all at +40%, tighter trail, stricter rug skip)\n/winscore: what the win-score model has learned (chance of +40% before -30%)\n/ai: the AI trader: judges coins like a person, with its reasons and results\n/pick COIN: have the AI trader judge one of your own ideas (it buys on paper if it agrees)\n/hold: the Hold bot: $300 paper bets on established coins, held for days\n/bounce: can the bot tell a shake-out from a real dump when the stop loss hits\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early\n/publish: push a stats snapshot to GitHub now\n/setup: (send inside a Telegram group with Topics on) sort alerts into topics\n/unsetup: move alerts back to this private chat")
                     elif cmd.startswith("/"):
                         await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
                 notify.REPLY.set(None)
@@ -885,7 +894,7 @@ class Runner:
             await asyncio.gather(
                 fomo.Feed(self.con, self.on_fomo_alert, self.track_coin, self.on_trader_sell).run(),
                 pumpportal_stream(self.on_event, config.PUMPPORTAL_API_KEY),
-                self.poll_loop(), self.fast_loop(), self.safety_loop(), self.risk_backfill(), self.trends.loop(), self.events.loop(), self.hold.loop(), self.trench.loop(), stats.loop(self), self.telegram_loop(), self.daily_loop(), self.scorecard_loop())
+                self.poll_loop(), self.fast_loop(), self.safety_loop(), self.risk_backfill(), self.trends.loop(), self.events.loop(), self.hold.loop(), self.analyst.loop(), self.trench.loop(), stats.loop(self), self.telegram_loop(), self.daily_loop(), self.scorecard_loop())
 
 
 def main():
