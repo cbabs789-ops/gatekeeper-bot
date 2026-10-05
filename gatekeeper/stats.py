@@ -14,7 +14,7 @@ from datetime import datetime
 
 import aiohttp
 
-from . import config, db, fomo, report, research, risk, winmodel
+from . import bounce, config, db, fomo, report, research, risk, winmodel
 
 log = logging.getLogger("gatekeeper.stats")
 API = "https://api.github.com/repos/{}/contents/{}"
@@ -55,6 +55,7 @@ def build(r, con=None, trench_text=None):
     safe("experiments", lambda: report.experiments_text(con))
     safe("risk", lambda: risk.report(con))
     safe("winscore", lambda: winmodel.report(con))
+    safe("bounce", lambda: bounce.report(con))
     safe("moonshots", lambda: risk.moonshots_text(con))
     safe("traders", lambda: fomo.scorecard_text(con))
     safe("research", lambda: research.text(con))
@@ -72,7 +73,7 @@ def build(r, con=None, trench_text=None):
     data = {"generated": int(time.time() * 1000), "generated_local": now.strftime("%Y-%m-%d %H:%M %Z"),
             "strategies": list(r.strats), "epochs": getattr(r, "epochs", {}), "open": open_, "closed_recent": closed,
             "rug_model": {k: v for k, v in (r.rug_model or {}).items() if k != "counts"}, "reports": parts}
-    order = ["settings", "status", "today", "week", "experiments", "exits", "winscore", "risk", "moonshots", "traders", "trench", "research", "trends", "events"]
+    order = ["settings", "status", "today", "week", "experiments", "exits", "winscore", "bounce", "risk", "moonshots", "traders", "trench", "research", "trends", "events"]
     md = ["# Gatekeeper stats: %s" % data["generated_local"], "",
           "Open paper trades: %d · strategies: %s" % (len(open_), ", ".join(r.strats)), ""]
     for k in order:

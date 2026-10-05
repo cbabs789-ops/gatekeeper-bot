@@ -12,7 +12,7 @@ import aiohttp
 import html
 import re
 
-from . import check, config, db, events, fomo, followtest, notify, report, research, risk, stats, sweep, trench, trends, web, winmodel
+from . import bounce, check, config, db, events, fomo, followtest, notify, report, research, risk, stats, sweep, trench, trends, web, winmodel
 from .sources import CHAINS, EVM_RE, SOL_RE, dexscreener_batch, pair_to_snapshot, pumpportal_stream, safety_check
 from .strategy import MIN, PaperBroker, Position, Strategy
 
@@ -313,6 +313,10 @@ class Runner:
                     await notify.send(self.session, "🎯 The win-score model passed its honest check and is now filtering trades for the win-score experiment bot. Send /winscore to see what it learned.")
             except Exception:  # noqa: BLE001
                 log.exception("Win model build failed")
+            try:
+                await asyncio.to_thread(lambda: bounce.build(db.connect()))
+            except Exception:  # noqa: BLE001
+                log.exception("Bounce model build failed")
         for name, st in self.strats.items():
             for a in st.on_tick(now):
                 await self.act(a, name)
@@ -776,6 +780,8 @@ class Runner:
                             await notify.send(self.session, "📤 Stats published (%s)." % when)
                         except Exception as e:  # noqa: BLE001
                             await notify.send(self.session, "📤 Publish failed: %s" % html.escape(str(e)[:200]))
+                    elif cmd in ("/bounce", "bounce"):
+                        await notify.send(self.session, bounce.report(self.con))
                     elif cmd in ("/winscore", "winscore", "/win"):
                         await notify.send(self.session, winmodel.report(self.con))
                     elif cmd in ("/experiments", "experiments", "/x"):
@@ -816,7 +822,7 @@ class Runner:
                             days = 7
                         asyncio.create_task(self.run_sweep(days))
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/check COIN: the bot's verdict on any coin (paste its contract address, a Fomo or DexScreener link, or $TICKER)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/events: upcoming speeches, summits and signings, and the coins that could move\n/experiments: how the test copies of Main are doing (sell all at +40%, tighter trail, stricter rug skip)\n/winscore: what the win-score model has learned (chance of +40% before -30%)\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early\n/publish: push a stats snapshot to GitHub now\n/setup: (send inside a Telegram group with Topics on) sort alerts into topics\n/unsetup: move alerts back to this private chat")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/check COIN: the bot's verdict on any coin (paste its contract address, a Fomo or DexScreener link, or $TICKER)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/events: upcoming speeches, summits and signings, and the coins that could move\n/experiments: how the test copies of Main are doing (sell all at +40%, tighter trail, stricter rug skip)\n/winscore: what the win-score model has learned (chance of +40% before -30%)\n/bounce: can the bot tell a shake-out from a real dump when the stop loss hits\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early\n/publish: push a stats snapshot to GitHub now\n/setup: (send inside a Telegram group with Topics on) sort alerts into topics\n/unsetup: move alerts back to this private chat")
                     elif cmd.startswith("/"):
                         await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
                 notify.REPLY.set(None)
