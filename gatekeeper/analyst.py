@@ -128,8 +128,8 @@ class Analyst:
     def _day(self):
         return "ai_spend_" + datetime.now().strftime("%Y-%m-%d")
 
-    def spent_today(self):
-        return float(db.kv_get(self.con, self._day()) or 0)
+    def spent_today(self, con=None):
+        return float(db.kv_get(con or self.con, self._day()) or 0)
 
     def can_call(self):
         now = time.time()
@@ -255,8 +255,8 @@ class Analyst:
         return "\n".join(L), snap
 
     # ---- deciding
-    def open_trades(self):
-        return [dict(x) for x in self.con.execute("SELECT * FROM ai_trades WHERE closed_at IS NULL ORDER BY opened_at")]
+    def open_trades(self, con=None):
+        return [dict(x) for x in (con or self.con).execute("SELECT * FROM ai_trades WHERE closed_at IS NULL ORDER BY opened_at")]
 
     def _log(self, mint, sym, source, d, price, cost):
         self.con.execute("INSERT INTO ai_reviews(ts,mint,symbol,source,decision,conviction,thesis,flags,price,cost) VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -427,15 +427,16 @@ class Analyst:
                 "2. On the server, run the hidden-input command you were given to save it as ANTHROPIC_API_KEY.\n"
                 "3. Restart the bot. Daily AI budget: $%g." % DAILY_CAP)
 
-    def text(self):
+    def text(self, con=None):
+        con = con or self.con          # the stats feed calls this from its own thread, with its own connection
         if not self.key:
             return self.setup_text()
         now = int(time.time() * 1000)
         L = ["🧠 <b>AI trader</b> (paper): judges each coin like a person, with a written reason",
-             "AI cost today: $%.2f of a $%g daily budget · model %s" % (self.spent_today(), DAILY_CAP, MODEL)]
+             "AI cost today: $%.2f of a $%g daily budget · model %s" % (self.spent_today(con), DAILY_CAP, MODEL)]
         if self.last_error:
             L.append("Last problem: %s" % html.escape(self.last_error))
-        closed = [dict(x) for x in self.con.execute("SELECT * FROM ai_trades WHERE closed_at IS NOT NULL ORDER BY closed_at DESC")]
+        closed = [dict(x) for x in con.execute("SELECT * FROM ai_trades WHERE closed_at IS NOT NULL ORDER BY closed_at DESC")]
         if closed:
             wins = sum(1 for t in closed if t["pnl_usd"] > 0)
             L.append("\nClosed: %d trades · %d%% win · $%+.2f" % (len(closed), wins * 100 // len(closed), sum(t["pnl_usd"] for t in closed)))
@@ -449,8 +450,8 @@ class Analyst:
             L.append("\nNo closed trades yet.")
         # the second-opinion scorecard: what happened to Main's buys the AI agreed with vs passed on
         agree, passed = [], []
-        for rv in self.con.execute("SELECT mint, decision, ts FROM ai_reviews WHERE source='main'"):
-            m = self.con.execute("SELECT pnl_usd FROM trades WHERE mode='live' AND COALESCE(run_id,'main')='main' AND mint=? AND closed_at IS NOT NULL "
+        for rv in con.execute("SELECT mint, decision, ts FROM ai_reviews WHERE source='main'"):
+            m = con.execute("SELECT pnl_usd FROM trades WHERE mode='live' AND COALESCE(run_id,'main')='main' AND mint=? AND closed_at IS NOT NULL "
                                  "AND opened_at BETWEEN ? AND ?", (rv["mint"], rv["ts"] - 10 * MIN, rv["ts"] + 10 * MIN)).fetchone()
             if m and m["pnl_usd"] is not None:
                 (agree if rv["decision"] == "buy" else passed).append(m["pnl_usd"])
@@ -458,14 +459,14 @@ class Analyst:
             L.append("\n<b>Second opinion on Main's buys</b> (Main's own result on each)")
             L.append("AI said buy: %d trades · Main made $%+.2f on them" % (len(agree), sum(agree)))
             L.append("AI said pass: %d trades · Main made $%+.2f on them" % (len(passed), sum(passed)))
-        opens = self.open_trades()
+        opens = self.open_trades(con)
         if opens:
             L.append("\n<b>Holding now</b>")
             for t in opens:
                 L.append("$%s · $%d · %.1f hours in · stop at %+.0f%% · %s" % (
                     html.escape(t["symbol"]), t["size_usd"], (now - t["opened_at"]) / HOUR, (t["stop_price"] / t["entry_price"] - 1) * 100,
                     html.escape((t["thesis"] or "")[:140])))
-        last = [dict(x) for x in self.con.execute("SELECT * FROM ai_reviews WHERE source!='manage' ORDER BY ts DESC LIMIT 5")]
+        last = [dict(x) for x in con.execute("SELECT * FROM ai_reviews WHERE source!='manage' ORDER BY ts DESC LIMIT 5")]
         if last:
             L.append("\n<b>Latest calls</b>")
             for rv in last:

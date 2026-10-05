@@ -174,8 +174,8 @@ class Hold:
         if s.get("top10") is not None and s["top10"] > P["MAX_TOP10"]: return False, "top 10 holders own %.0f%%" % s["top10"]
         return True, "top 10 hold %s%%" % ("%.0f" % s["top10"] if s.get("top10") is not None else "?")
 
-    def open_trades(self):
-        return [dict(x) for x in self.con.execute("SELECT * FROM hold_trades WHERE closed_at IS NULL ORDER BY opened_at")]
+    def open_trades(self, con=None):
+        return [dict(x) for x in (con or self.con).execute("SELECT * FROM hold_trades WHERE closed_at IS NULL ORDER BY opened_at")]
 
     # ---- trading
     async def close(self, t, price, reason, now):
@@ -264,12 +264,13 @@ class Hold:
             await asyncio.sleep(every * 60)
 
     # ---- report
-    def text(self):
+    def text(self, con=None):
+        con = con or self.con          # the stats feed calls this from its own thread, with its own connection
         now = int(time.time() * 1000)
         L = ["💎 <b>Hold bot</b> (paper, $%d a trade): established coins, held for days" % P["BET"],
              "Buys coins with a cap of %s or more, a pool of %s+, %d+ days old and climbing. Stop -%d%%, then a %d%% trailing stop. Up to %d days." % (
                  km(P["MIN_CAP"]), km(P["MIN_LIQ"]), P["MIN_AGE_DAYS"], P["STOP"], P["TRAIL"], P["MAX_DAYS"])]
-        closed = [dict(x) for x in self.con.execute("SELECT * FROM hold_trades WHERE closed_at IS NOT NULL ORDER BY closed_at DESC")]
+        closed = [dict(x) for x in con.execute("SELECT * FROM hold_trades WHERE closed_at IS NOT NULL ORDER BY closed_at DESC")]
         if closed:
             wins = sum(1 for t in closed if t["pnl_usd"] > 0)
             L.append("\nClosed: %d trades · %d%% win · $%+.2f" % (len(closed), wins * 100 // len(closed), sum(t["pnl_usd"] for t in closed)))
@@ -277,7 +278,7 @@ class Hold:
                 L.append("$%s: %+.0f%% ($%+.2f) · %s" % (html.escape(t["symbol"]), t["pnl_pct"], t["pnl_usd"], html.escape(t["exit_reason"] or "")))
         else:
             L.append("\nNo closed trades yet.")
-        opens = self.open_trades()
+        opens = self.open_trades(con)
         if opens:
             L.append("\n<b>Holding now</b>")
             for t in opens:
