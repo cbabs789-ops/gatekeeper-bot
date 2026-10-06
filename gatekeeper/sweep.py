@@ -51,9 +51,26 @@ VARIANTS = [
 
 def run(days=7, progress=None):
     con = db.connect()
-    safety = {r["mint"]: dict(r) for r in con.execute("SELECT * FROM safety")}
     coins = {r["mint"]: dict(r) for r in con.execute("SELECT * FROM coins")}
-    look = lambda m: safety.get(m)  # noqa: E731
+    # Safety as it was known AT THE TIME. The safety table only keeps each coin's latest check, which can include a
+    # danger flag or a holder jump that appeared after the bot would have bought. So build a timeline per coin from
+    # the check log (kept since Oct 6) and from the vital signs recorded at 30, 60, 120 and 240 minutes old.
+    con.executescript(db.SAFETY_LOG)
+    timeline = {}
+    for r in con.execute("SELECT * FROM safety_log ORDER BY checked_at"):
+        timeline.setdefault(r["mint"], []).append((r["checked_at"], dict(r)))
+    logged = set(timeline)
+    for r in con.execute("SELECT mint, ts, top10, insiders, lp_ok, auth_ok, danger, dev_prev, dev_dead FROM coin_features ORDER BY ts"):
+        if r["mint"] in logged:
+            continue
+        timeline.setdefault(r["mint"], []).append((r["ts"], {
+            "mint": r["mint"], "checked_at": r["ts"], "mint_revoked": r["auth_ok"], "freeze_revoked": r["auth_ok"], "lp_na": 0,
+            "lp_locked": 100 if r["lp_ok"] else 0, "top10": r["top10"], "insiders": r["insiders"],
+            "danger": "flagged" if r["danger"] else None, "creator_prev": r["dev_prev"], "creator_dead": r["dev_dead"]}))
+    for m in timeline:
+        timeline[m].sort(key=lambda x: x[0])
+    known, upto = {}, {}                  # what each coin's safety check said as of the replay's current moment
+    look = lambda m: known.get(m)  # noqa: E731
     strats = []
     from . import risk
     risky = []
@@ -82,8 +99,10 @@ def run(days=7, progress=None):
     for st in risky:
         st.risk_model = model
     # coins that can't pass basic safety never get traded by any variant, so skip them
+    # (authorities are never handed back once revoked, so this filter can't hide a coin the bot could have bought;
+    #  the old filter also dropped coins that were flagged dangerous LATER, which the live bot had no way to know)
     q = ("SELECT * FROM snapshots WHERE ts>=? AND mint IN (SELECT mint FROM safety WHERE mint_revoked=1 "
-         "AND freeze_revoked=1 AND danger IS NULL) ORDER BY ts")
+         "AND freeze_revoked=1) ORDER BY ts")
     last, n, ticks = None, 0, 0
     span = max(1, lo_hi["b"] - lo_hi["a"])
     next_mark = 10
@@ -102,6 +121,13 @@ def run(days=7, progress=None):
         c = coins.get(s["mint"])
         if not c:
             continue
+        tl = timeline.get(s["mint"])
+        if tl:
+            i = upto.get(s["mint"], 0)
+            while i < len(tl) and tl[i][0] <= s["ts"]:
+                known[s["mint"]] = tl[i][1]
+                i += 1
+            upto[s["mint"]] = i
         for _, st in strats:
             st.on_snapshot(s, c)
         n += 1
@@ -124,7 +150,8 @@ def text(res):
          "Each line: trades · win rate · total profit · first half / second half",
          "A rule is only real if both halves are positive.",
          ("The second half is the honest one: the rug score was learned only from %s coins that finished before it began.\n" % format(res.get("model_n", 0), ","))
-         if res.get("honest") else "Not enough older coins yet for an honest rug score, so these results flatter the rug-score lines.\n"]
+         if res.get("honest") else "Not enough older coins yet for an honest rug score, so these results flatter the rug-score lines.\n",
+         "Safety checks are replayed as they were known at the time, not as they look today.\n"]
     ranked = sorted(res["results"], key=lambda r: (r[3].get("total_pnl", 0) if r[3].get("trades") else -1e9), reverse=True)
     for label, all_, a, b in ranked:
         if not all_.get("trades"):

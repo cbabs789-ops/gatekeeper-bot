@@ -46,6 +46,7 @@ def connect(path=None):
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=NORMAL")
     con.executescript(SCHEMA)
+    con.executescript(SAFETY_LOG)
     for sql in ("ALTER TABLE coins ADD COLUMN chain TEXT DEFAULT 'solana'",
                 "ALTER TABLE coins ADD COLUMN added_at INTEGER",
                 "ALTER TABLE coins ADD COLUMN source TEXT",
@@ -61,7 +62,24 @@ def connect(path=None):
     return con
 
 
+SAFETY_LOG = """
+CREATE TABLE IF NOT EXISTS safety_log (
+  mint TEXT, checked_at INTEGER, mint_revoked INTEGER, freeze_revoked INTEGER, lp_locked REAL, top10 REAL,
+  insiders INTEGER, danger TEXT, lp_na INTEGER, creator_prev INTEGER, creator_dead INTEGER
+);
+CREATE INDEX IF NOT EXISTS safety_log_mint ON safety_log(mint, checked_at);
+"""
+
+
 def save_safety(con, res):
+    # keep every check, not just the latest: the rule test must see what was known AT THE TIME, not what we know now
+    try:
+        row = dict({"lp_na": 0, "insiders": None, "top10": None, "danger": None, "creator_prev": None, "creator_dead": None,
+                    "lp_locked": None, "mint_revoked": None, "freeze_revoked": None}, **res)
+        con.execute("INSERT INTO safety_log VALUES(:mint,:checked_at,:mint_revoked,:freeze_revoked,:lp_locked,:top10,:insiders,:danger,"
+                    ":lp_na,:creator_prev,:creator_dead)", row)
+    except Exception:  # noqa: BLE001
+        pass
     con.execute("INSERT OR REPLACE INTO safety(mint, checked_at, mint_revoked, freeze_revoked, lp_locked, top10, insiders, danger, rc_score, lp_na, "
                 "creator, creator_prev, creator_dead) VALUES(:mint,:checked_at,:mint_revoked,:freeze_revoked,:lp_locked,:top10,:insiders,:danger,"
                 ":rc_score,:lp_na,:creator,:creator_prev,:creator_dead)",
