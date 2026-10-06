@@ -18,7 +18,7 @@ from datetime import datetime
 import aiohttp
 
 from . import notify
-from .sources import dexscreener_batch, safety_check
+from .sources import DexFailed, dexscreener_batch, safety_check
 
 log = logging.getLogger("gatekeeper.hold")
 GECKO = "https://api.geckoterminal.com/api/v2/networks/solana/%s?page=%d&include=base_token"
@@ -113,7 +113,7 @@ def established(c):
 def trend_fails(c):
     f = []
     if not (P["UP24_MIN"] <= c["pc24h"] <= P["UP24_MAX"]):
-        f.append("24h %+.0f%% (wants +%d%% to +%d%%)" % (c["pc24h"], P["UP24_MIN"], P["UP24_MAX"]))
+        f.append("24h %+.1f%% (wants +%d%% to +%d%%)" % (c["pc24h"], P["UP24_MIN"], P["UP24_MAX"]))
     if c["pc6h"] < 0:
         f.append("down %.0f%% over 6h" % -c["pc6h"])
     if c["pc1h"] < -5:
@@ -132,6 +132,7 @@ class Hold:
         self.seen = {}           # mint -> scans in a row it qualified
         self.safety = {}         # mint -> (ts, report)
         self.last_scan = 0
+        self.miss = {}           # trade id -> price checks in a row that came back empty
 
     # ---- data
     async def fetch(self):
@@ -158,7 +159,7 @@ class Hold:
         """(ok, why). Cached for 6 hours."""
         now = time.time()
         hit = self.safety.get(mint)
-        if not hit or now - hit[0] > 6 * 3600:
+        if not hit or now - hit[0] > (6 * 3600 if hit[1] else 600):       # a failed check is retried after 10 minutes
             try:
                 hit = (now, await safety_check(self.r.session, "solana", mint))
             except Exception:  # noqa: BLE001
@@ -194,12 +195,19 @@ class Hold:
         if not opens:
             return
         pairs = await dexscreener_batch(self.r.session, [t["mint"] for t in opens], "solana")
+        if isinstance(pairs, DexFailed):
+            return                        # the price feed didn't answer: try again next round
         for t in opens:
             pair = pairs.get(t["mint"]) or {}
             price = _f(pair.get("priceUsd")) or (self.watch.get(t["mint"]) or {}).get("price") or 0
             liq = _f((pair.get("liquidity") or {}).get("usd")) or (self.watch.get(t["mint"]) or {}).get("liq") or 0
             if not price:
+                # the feed answered and lists no pool for this coin. An hour of that means it is gone.
+                self.miss[t["id"]] = self.miss.get(t["id"], 0) + 1
+                if self.miss[t["id"]] >= 12:
+                    await self.close(t, 0.0, "Pool gone: no price for an hour (counted as a total loss)", now)
                 continue
+            self.miss.pop(t["id"], None)
             peak = max(t["peak"] or t["entry_price"], price)
             if peak != t["peak"]:
                 self.con.execute("UPDATE hold_trades SET peak=? WHERE id=?", (peak, t["id"]))
@@ -228,7 +236,7 @@ class Hold:
         self.con.execute("DELETE FROM hold_snaps WHERE ts<?", (now - 30 * DAY,))
         held = {t["mint"] for t in self.open_trades()}
         slots = P["MAX_OPEN"] - len(held)
-        recent = {x["mint"] for x in self.con.execute("SELECT mint FROM hold_trades WHERE opened_at>?", (now - P["COOLDOWN_DAYS"] * DAY,))}
+        recent = {x["mint"] for x in self.con.execute("SELECT mint FROM hold_trades WHERE COALESCE(closed_at, opened_at)>?", (now - P["COOLDOWN_DAYS"] * DAY,))}
         # strongest steady climbers first
         for c in sorted(watch.values(), key=lambda c: -c["pc24h"]):
             if slots <= 0:
@@ -239,6 +247,14 @@ class Hold:
             if not ok:
                 c["blocked"] = why_safe
                 continue
+            # Buy at the same price source that will manage the trade. (The watchlist comes from another feed, whose
+            # pool size can differ a lot from this one's: that made the "pool shrank" exit fire on a healthy coin.)
+            pair = (await dexscreener_batch(self.r.session, [c["mint"]], "solana")).get(c["mint"]) or {}
+            px, lq = _f(pair.get("priceUsd")), _f((pair.get("liquidity") or {}).get("usd"))
+            if not px or lq < P["MIN_LIQ"]:
+                c["blocked"] = "no matching live price right now"
+                continue
+            c = dict(c, price=px, liq=lq)
             why = "cap %s, pool %s, %.0f days old, %+.0f%% in 24h and %+.0f%% in 6h, %d buyers vs %d sellers today, %s" % (
                 km(c["fdv"]), km(c["liq"]), c["age_days"], c["pc24h"], c["pc6h"], c["buyers24"], c["sellers24"], why_safe)
             self.con.execute("INSERT INTO hold_trades(mint,symbol,opened_at,entry_price,entry_fdv,entry_liq,size_usd,peak,why) VALUES(?,?,?,?,?,?,?,?,?)",
@@ -292,6 +308,6 @@ class Hold:
         for c in sorted(self.watch.values(), key=lambda c: -c["fdv"])[:12]:
             fails = trend_fails(c)
             verdict = c.get("blocked") or ("; ".join(fails[:2]) if fails else "in an uptrend")
-            L.append("$%s · cap %s · pool %s · 24h %+.0f%% · %s" % (html.escape(c["symbol"]), km(c["fdv"]), km(c["liq"]), c["pc24h"], html.escape(verdict)))
+            L.append("$%s · cap %s · pool %s · 24h %+.1f%% · %s" % (html.escape(c["symbol"]), km(c["fdv"]), km(c["liq"]), c["pc24h"], html.escape(verdict)))
         L.append("\nUntested: there is no recorded history for these coins yet, so the paper trades are the test.")
         return "\n".join(L)

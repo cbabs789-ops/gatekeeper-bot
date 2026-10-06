@@ -148,7 +148,9 @@ def score(model, feat):
     n_w, n_l = model["pos"], model["n"] - model["pos"]
     logit = math.log(model["prior"] / (1 - model["prior"]))
     for k, v in feat.items():
-        c = counts.get(k, {}).get(v, {"w": 0, "l": 0})
+        if v not in counts.get(k, {}):
+            continue                                   # a reading the model never saw says nothing either way
+        c = counts[k][v]
         vals = max(2, len(counts.get(k, {})))
         logit += math.log(((c["w"] + 1) / (n_w + vals)) / ((c["l"] + 1) / (n_l + vals)))
     return round(100 / (1 + math.exp(-max(-30, min(30, logit)))))

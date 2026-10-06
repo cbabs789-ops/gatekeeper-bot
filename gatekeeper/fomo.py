@@ -512,16 +512,19 @@ async def price_calls(session, con, dex_batch, pair_to_snapshot):
                 break
     for chain, items in due.items():
         addrs = list(dict.fromkeys(r["token_address"] for r, _ in items))
-        prices = {}
+        prices, failed = {}, set()
         for i in range(0, len(addrs), 30):
             pairs = await dex_batch(session, addrs[i:i + 30], chain)
+            if type(pairs).__name__ == "DexFailed":            # the feed didn't answer: grade these next time,
+                failed.update(addrs[i:i + 30])                  # don't write them down as "went to zero"
+                continue
             for a, p in pairs.items():
                 snap = pair_to_snapshot(a, p, now)
                 prices[a] = (snap["price"], snap["liq"], snap.get("_socials"))
             await asyncio.sleep(1)
         for r, col in items:
             pr = prices.get(r["token_address"])
-            if not pr and col == "p0":
+            if (not pr and col == "p0") or r["token_address"] in failed:
                 continue
             price, liq, soc = pr if pr else (0.0, 0.0, None)     # not listed any more counts as gone
             if col == "p0":

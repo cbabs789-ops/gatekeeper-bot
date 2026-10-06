@@ -126,7 +126,8 @@ def mark_dead(con, mint, now):
 
 
 def rugged(row):
-    return bool(row["dead"]) or (row["min_liq_frac"] or 1) < DRAIN_FRAC
+    m = row["min_liq_frac"]          # 0.0 is a fully drained pool, not "missing"
+    return bool(row["dead"]) or (m is not None and m < DRAIN_FRAC)
 
 
 # ------------------------------------------------------------------ backfill
@@ -191,7 +192,7 @@ def build(con, days=21, until=None, save=True):
         model["counts"] = counts
         # the profit target that paid best for each rug-risk band (needs 100+ coins in the band)
         model["targets"] = {}
-        for label, n, hit, drained, best in targets(con, model):
+        for label, n, hit, drained, best in targets(con, model, until=until):
             # only use a data target when it actually made money; a "least bad" losing target is worse than trailing
             if best and n >= 100 and best[1] > 0:
                 model["targets"][label] = best[0]
@@ -223,7 +224,9 @@ def score(model, row):
         n_r, n_s = model["rugs"], model["n"] - model["rugs"]
         logit = math.log(model["prior"] / (1 - model["prior"]))
         for k, v in features(row).items():
-            c = counts.get(k, {}).get(v, {"r": 0, "s": 0})
+            if v not in counts.get(k, {}):
+                continue                                # a reading the model never saw says nothing either way
+            c = counts[k][v]
             vals = max(2, len(counts.get(k, {})))
             p_r = (c["r"] + 1) / (n_r + vals)          # Laplace smoothing
             p_s = (c["s"] + 1) / (n_s + vals)
@@ -248,10 +251,10 @@ TARGETS = (1.2, 1.4, 2, 3, 5, 8)
 RISK_BANDS = ((0, 20, "under 20%"), (20, 35, "20-35%"), (35, 50, "35-50%"), (50, 60, "50-60%"), (60, 101, "60%+"))
 
 
-def targets(con, model, stop=0.15, cost=0.06, days=21):
+def targets(con, model, stop=0.15, cost=0.06, days=21, until=None):
     """For each risk band: how often coins reached each profit target within 12h, how often they drained,
     and which target would have made the most (rough: assumes the peak came before any drain)."""
-    now = int(time.time() * 1000)
+    now = until or int(time.time() * 1000)          # until: only coins finished before this moment (honest tests)
     rows = [dict(r) for r in con.execute("SELECT * FROM coin_features WHERE ts<? AND ts>?",
                                          (now - LABEL_AFTER_MS, now - days * 86400000))]
     out = []

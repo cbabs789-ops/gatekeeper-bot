@@ -75,7 +75,8 @@ def run(days=7):
     watch = {h.lower() for h in fomo.watchlist()}
     since = int(time.time() * 1000) - int(days * 86400000)
     coins = {r["mint"]: dict(r) for r in con.execute("SELECT * FROM coins")}
-    safety = {r["mint"]: dict(r) for r in con.execute("SELECT * FROM safety")}
+    from .sweep import Known, safety_timeline
+    known = Known(safety_timeline(con))          # safety as it was known at the time, not each coin's latest check
 
     buys = {}
     for r in con.execute("SELECT ts, trader, token_address, chain, usd FROM fomo_events "
@@ -94,8 +95,7 @@ def run(days=7):
     strats = []
     for label, v, ov in VARIANTS:
         p = config.strategy_params(ov, "follow")
-        p["MAX_OPEN"] = 1000
-        look = (lambda m: {"mint_revoked": 1, "freeze_revoked": 1, "lp_na": 1}) if v.get("no_safety") else safety.get
+        look = (lambda m: {"mint_revoked": 1, "freeze_revoked": 1, "lp_na": 1, "top10": 0}) if v.get("no_safety") else known.get
         if v.get("no_safety"):
             p["MIN_LIQ_USD"] = 0
         sig = signals(buys, watch, v)
@@ -131,6 +131,7 @@ def run(days=7):
         c = coins.get(m)
         if not c:
             continue
+        known.advance(m, ts, c)
         for s in strats:
             st = s["st"]
             st.on_snapshot(snap, c)          # signal mode: never enters on its own
@@ -175,7 +176,8 @@ def text(res):
     days = (res["to"] - res["from"]) / 86400000
     L = ["🧪 <b>Follow test</b>: buying when your Fomo traders buy, %.1f days, %d coins with price history" % (days, res["coins"]),
          "Each line: trades · win rate · total profit · first half / second half",
-         "A rule is only real if both halves are positive.\n"]
+         "A rule is only real if both halves are positive.",
+         "Caveats: this uses today's trader list (picked with hindsight) and no rug score, so treat it as a best case.\n"]
     ranked = sorted(res["results"], key=lambda r: (r["b"].get("total_pnl", 0) if r["b"].get("trades") else -1e9), reverse=True)
     for r in ranked:
         a, b, al = r["a"], r["b"], r["all"]

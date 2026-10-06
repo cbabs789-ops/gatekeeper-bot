@@ -91,13 +91,19 @@ def _levels(p, pos, entry):
     best = (pos.peak_after / entry - 1) * 100 if entry else 0
     lv = {"stop": -p["STOP_LOSS_PCT"]}
     if not pos.took_half:
-        lv["target"] = round((p["TAKE_HALF_X"] - 1) * 100, 1)
+        if p.get("TAKE_PROFIT_PCT"):
+            lv["sell_all"] = round(float(p["TAKE_PROFIT_PCT"]), 1)        # sells everything here; no half-sale first
+        elif getattr(pos, "target_x", None):
+            lv["sell_all"] = round((pos.target_x - 1) * 100, 1)
+        elif p["TAKE_HALF_X"] < 10:
+            lv["target"] = round((p["TAKE_HALF_X"] - 1) * 100, 1)
     else:
         lv["trail"] = round((pos.peak_after * (1 - p["TRAIL_PCT"] / 100) / entry - 1) * 100, 1)
     if p.get("LOCK_START_PCT") and best >= p["LOCK_START_PCT"]:
         lv["lock"] = round((pos.peak_after * (1 - p["LOCK_TRAIL_PCT"] / 100) / entry - 1) * 100, 1)
     if p.get("BREAKEVEN_AT_PCT") and best >= p["BREAKEVEN_AT_PCT"]:
-        lv["floor"] = round(2 * (p["FEE_PCT"] + p["PENALTY_PCT"]), 1)
+        c = (p["FEE_PCT"] + p["PENALTY_PCT"]) / 100
+        lv["floor"] = round(((1 + c) / (1 - c) - 1) * 100, 1)
     return lv
 
 
@@ -126,14 +132,17 @@ def state(runner):
         for mint, pos in st.positions.items():
             cs = st.coins.get(mint)
             price, liq = (cs.last_price, cs.last_liq) if cs else (pos.spot_at_entry, 0)
+            stale = not cs or not liq or now - cs.last_ts > 3 * 60000
             value = st.broker.sell(price, liq, pos.qty_open) if pos.qty_open > 0 and liq else 0.0
             pnl = pos.proceeds + value - pos.size_usd
+            if stale and not liq:
+                pnl = 0.0                      # no price to value it at: shown as "no live price", left out of the total
             unreal += pnl
             out["open"].append({
                 "strategy": name, "symbol": pos.symbol, "mint": mint, "link": _link(mint), "opened_at": pos.opened_at,
                 "size": pos.size_usd, "value_if_sold": round(pos.proceeds + value, 2), "pnl": round(pnl, 2),
                 "pnl_pct": round(pnl / pos.size_usd * 100, 1), "move_pct": round((price / pos.spot_at_entry - 1) * 100, 1) if pos.spot_at_entry else None,
-                "took_half": pos.took_half, "liq": round(liq), "why": pos.why,
+                "took_half": pos.took_half, "liq": round(liq), "why": pos.why, "stale": stale,
                 "mc_in": _mc(pos.spot_at_entry, _supply(con, mint)), "mc_now": _mc(price, _supply(con, mint)),
                 "stats": _coin_stats(con, mint), "risk": pos.risk,
                 "log": [{"ts": g.get("ts"), "side": g.get("side"), "usd": round(g.get("usd") or 0, 2),
@@ -144,6 +153,8 @@ def state(runner):
         out["strategies"].append({
             "name": name, "label": report.LABEL.get(name, name), "alerts": name in config.ALERT_PRESETS, "shadow": name in config.SHADOW,
             "all": _stats(closed), "current": _stats(current), "since": since, "today": _stats(today),
+            "rules_since": report.rules_changed(con, name),
+            "rules": _stats(report._closed(con, since_ms=report.rules_changed(con, name), strategy=name)) if report.rules_changed(con, name) else None,
             "open": len(st.positions), "unrealized": round(unreal, 2)})
         eq, pts = 0.0, []
         for r in con.execute("SELECT closed_at, pnl_usd FROM trades WHERE mode='live' AND closed_at IS NOT NULL "
@@ -153,15 +164,41 @@ def state(runner):
         step = max(1, len(pts) // 300)
         out["equity"][name] = pts[::step] + (pts[-1:] if pts and (len(pts) - 1) % step else [])
 
-    # experiments: Main and its silent test copies, compared over the same stretch (since the first test trade)
+    # experiments: each silent test copy against Main over the SAME days (from that copy's first trade)
     xs = [n for n in runner.strats if n in config.SHADOW]
-    r0 = con.execute("SELECT MIN(opened_at) t FROM trades WHERE mode='live' AND run_id IN (%s)" % ",".join("?" * len(xs)), xs).fetchone() if xs else None
-    x0 = r0["t"] if r0 and r0["t"] else None
-    out["experiments"] = {"since": x0, "rows": [
-        {"name": n, "label": report.LABEL.get(n, n).replace("Test: ", "").replace("Main (strict rules)", "Main (as set)"),
-         "stats": _stats(report._closed(con, since_ms=x0, strategy=n)) if x0 else _stats([]),
-         "open": len(runner.strats[n].positions)} for n in ["main"] + xs if n in runner.strats]}
-    for r in con.execute("SELECT * FROM trades WHERE mode='live' AND closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 400"):
+    xrows = []
+    for n in xs:
+        r0 = con.execute("SELECT MIN(opened_at) t FROM trades WHERE mode='live' AND run_id=?", (n,)).fetchone()
+        t0 = r0["t"] if r0 and r0["t"] else None
+        xrows.append({"name": n, "label": report.LABEL.get(n, n).replace("Test: ", ""), "since": t0,
+                      "stats": _stats(report._closed(con, since_ms=t0, strategy=n)) if t0 else _stats([]),
+                      "main": _stats(report._closed(con, since_ms=t0, strategy="main")) if t0 else None,
+                      "open": len(runner.strats[n].positions)})
+    out["experiments"] = {"rows": xrows}
+    # the bots that keep their own books (not in the trades table)
+    out["other"] = []
+    for table, label, note in (("hold_trades", "Hold bot", "$300 paper bets on established coins, held for days"),
+                               ("ai_trades", "AI trader", "judges each coin like a person; $100 to $300 by conviction")):
+        try:
+            cl = [dict(x) for x in con.execute("SELECT symbol, pnl_usd, pnl_pct, exit_reason, closed_at FROM %s WHERE closed_at IS NOT NULL ORDER BY closed_at DESC" % table)]
+            op = [dict(x) for x in con.execute("SELECT symbol, size_usd, opened_at, entry_price, peak FROM %s WHERE closed_at IS NULL ORDER BY opened_at" % table)]
+        except Exception:  # noqa: BLE001
+            continue
+        out["other"].append({"label": label, "note": note, "trades": len(cl), "wins": sum(1 for x in cl if (x["pnl_usd"] or 0) > 0),
+                             "pnl": round(sum(x["pnl_usd"] or 0 for x in cl), 2),
+                             "open": [{"symbol": x["symbol"], "size": x["size_usd"], "opened_at": x["opened_at"],
+                                       "best_pct": round((x["peak"] / x["entry_price"] - 1) * 100, 1) if x["entry_price"] and x["peak"] else None} for x in op],
+                             "closed": [{"symbol": x["symbol"], "pnl": round(x["pnl_usd"] or 0, 2), "pnl_pct": round(x["pnl_pct"] or 0, 1),
+                                         "exit": x["exit_reason"], "closed_at": x["closed_at"]} for x in cl[:15]]})
+    running = set(runner.strats)
+    per = {}
+    for r in con.execute("SELECT * FROM trades WHERE mode='live' AND closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 4000"):
+        name = r["run_id"] or "main"
+        if name not in running:
+            continue                       # a retired bot's trades don't belong in the lists of what is running now
+        per[name] = per.get(name, 0) + 1
+        if per[name] > 150:
+            continue
         try:
             lg = json.loads(r["legs"] or "[]")
         except ValueError:
@@ -177,6 +214,8 @@ def state(runner):
 
     acts = []
     for r in con.execute("SELECT run_id, symbol, mint, legs FROM trades WHERE mode='live' AND opened_at>=?", (now - 3 * 86400000,)):
+        if (r["run_id"] or "main") not in running:
+            continue
         try:
             legs = json.loads(r["legs"] or "[]")
         except ValueError:
@@ -185,7 +224,9 @@ def state(runner):
             acts.append({"ts": g.get("ts"), "strategy": r["run_id"] or "main", "symbol": r["symbol"], "link": _link(r["mint"]),
                          "mc": _mc(g.get("spot"), _supply(con, r["mint"])),
                          "side": g.get("side"), "usd": round(g.get("usd") or 0, 2), "why": g.get("why") or ""})
-    out["activity"] = sorted(acts, key=lambda a: a["ts"] or 0, reverse=True)[:60]
+    acts.sort(key=lambda a: a["ts"] or 0, reverse=True)
+    # cut the list per group, so busy experiment bots can't push Main and Follow out of it
+    out["activity"] = [a for a in acts if a["strategy"] not in config.SHADOW][:60] + [a for a in acts if a["strategy"] in config.SHADOW][:60]
 
     try:
         fomo.ensure_schema(con)
@@ -390,8 +431,9 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 <header><h1>🤖 Gatekeeper Live</h1><span class="pill" id="health">connecting…</span></header>
 <nav class="tabs"><button id="tb-trading" class="on" onclick="tab('trading')">📈 Trading</button><button id="tb-trends" onclick="tab('trends')">📰 Trends</button><button id="tb-events" onclick="tab('events')">🗓️ Events</button><button id="tb-trench" onclick="tab('trench')">⛏️ Insiders</button><button id="tb-exp" onclick="tab('exp')">🧪 Experiments</button></nav>
 <div id="tab-exp" hidden>
-<p class="dim">Copies of Main with one thing changed, trading the same coins silently on paper. No alerts, and they never count toward Main's results. After about a week, the best one becomes Main.</p>
-<h2>Head to head</h2><div class="list" id="x-table"></div>
+<p class="dim">Copies of Main with one rule changed, trading silently on paper. Each one can buy coins Main skips, or skip coins Main buys. No alerts, and they never count toward Main's results. Do not judge one on fewer than about 30 trades.</p>
+<h2>Each test bot against Main, over the same days</h2><div class="list" id="x-table"></div>
+<h2>Hold bot and AI trader <span class="dim" style="text-transform:none;letter-spacing:0">(separate paper bots with their own books)</span></h2><div class="list" id="x-other"></div>
 <h2>Pick a bot to see its trades</h2><nav class="tabs" id="x-pick" style="flex-wrap:wrap"></nav>
 <h2>Open trades <span class="dim" style="text-transform:none;letter-spacing:0">(value if sold right now, after fees and slippage)</span></h2><div class="list" id="x-open"></div>
 <h2>Closed trades <span class="dim" style="text-transform:none;letter-spacing:0">(tap one for its chart)</span></h2><div class="list" id="x-closed"></div>
@@ -444,8 +486,16 @@ const mcf=v=>{if(!v)return null;if(v>=1e9)return "$"+(+(v/1e9).toFixed(2))+"B MC
 const dur=ms=>{const m=Math.round(ms/60000);return m<60?m+"m":Math.floor(m/60)+"h "+(m%60)+"m"};
 const NAMES={main:"Main",wide:"Wide",follow:"Follow",momentum:"Momentum",survivor:"Survivor",x_all40:"Sell all +40%",x_trail10:"Tight trail",x_skip35:"Rug skip 35%",x_noinsider:"No insider rule",x_insider1:"Strict insider rule",x_scalp20:"Scalp +20%",x_scalp30:"Scalp +30%",x_winscore:"Win score",x_aggro:"Smart aggressive",x_swing:"Swing",x_stop40:"Stop -40%",x_stopwait:"Stop waits 3 min",x_age60:"From 60 min old",x_best:"Best of"};
 function renderExp(X,s){if(!$("x-table"))return;const E=s.experiments||{rows:[]};
- $("x-table").replaceChildren(...(E.rows.length>1?[el("div","dim",E.since?"Compared since "+t(E.since)+" (the first experiment trade)":"Waiting for the first trade. They trade the same coins as Main.")].concat(E.rows.map(r=>{const d=el("div","item");const a=r.stats;const w=el("div");w.append(el("b",null,r.label));if(r.name==="main")w.append(el("span","tag","live strategy"));
-  d.append(w,el("b",cls(a.pnl),sgn(a.pnl)));d.append(el("div","sub",a.trades+" trades · "+a.win_rate+"% win · "+(a.trades?sgn(a.pnl/a.trades)+" a trade":"no trades yet")+" · open now "+r.open));return d})):[el("div","empty","Experiments start with the next update.")]));
+ const fmtS=a=>a&&a.trades?a.trades+" trades · "+a.win_rate+"% win · "+sgn(a.pnl):"no closed trades yet";
+ $("x-table").replaceChildren(...(E.rows.length?E.rows.map(r=>{const d=el("div","item");const a=r.stats;const w=el("div");w.append(el("b",null,r.label));
+  d.append(w,el("b",cls(a.pnl),sgn(a.pnl)));
+  d.append(el("div","sub",(r.since?"Since "+t(r.since)+": ":"")+fmtS(a)+" · open now "+r.open));
+  if(r.main)d.append(el("div","sub","Main over the same days: "+fmtS(r.main)));return d}):[el("div","empty","No experiment bots are running.")]));
+ if($("x-other"))$("x-other").replaceChildren(...((s.other||[]).length?s.other.map(o=>{const d=el("div","item");const w=el("div");w.append(el("b",null,o.label));
+  d.append(w,el("b",cls(o.pnl),sgn(o.pnl)));d.append(el("div","sub",o.note));
+  d.append(el("div","sub",o.trades?o.trades+" closed · "+o.wins+" won · "+sgn(o.pnl)+" all time":"No closed trades yet"));
+  o.open.forEach(p=>d.append(el("div","sub","Holding $"+p.symbol+" · $"+p.size+" · "+dur(s.now-p.opened_at)+(p.best_pct!=null?" · best so far "+pct(p.best_pct):""))));
+  o.closed.slice(0,6).forEach(c=>d.append(el("div","sub","$"+c.symbol+": "+pct(c.pnl_pct)+" ("+sgn(c.pnl)+") · "+(c.exit||""))));return d}):[el("div","empty","Not running yet.")]));
  const names=X.strategies.map(x=>x.name);if(names.length&&!names.includes(XBOT))XBOT=names[0];
  $("x-pick").replaceChildren(...X.strategies.map(x=>{const b=el("button",x.name===XBOT?"on":"",NAMES[x.name]||x.name);b.onclick=()=>{XBOT=x.name;load()};return b}));
  const xo=X.open.filter(p=>p.strategy===XBOT).sort((a,b)=>b.opened_at-a.opened_at),xc=X.closed.filter(c=>c.strategy===XBOT);
@@ -459,7 +509,7 @@ function spark(pts){const ns="http://www.w3.org/2000/svg",s=document.createEleme
  const p=document.createElementNS(ns,"polyline");p.setAttribute("points",pts.map((q,i)=>x(i)+","+y(q[1])).join(" "));p.setAttribute("fill","none");
  p.setAttribute("stroke",pts[pts.length-1][1]>=0?"#3fb950":"#f85149");p.setAttribute("stroke-width","2");p.setAttribute("vector-effect","non-scaling-stroke");s.appendChild(p);return s}
 function stat(k,v,c){const d=el("div","card");d.append(el("div","k",k),el("div","v "+(c||""),v));return d}
-const LV={stop:["#f85149","stop"],target:["#3fb950","sell half"],trail:["#d29922","trailing stop"],lock:["#d29922","profit lock"],floor:["#58a6ff","breakeven floor"]};
+const LV={stop:["#f85149","stop"],target:["#3fb950","sell half"],sell_all:["#3fb950","sell all"],trail:["#d29922","trailing stop"],lock:["#d29922","profit lock"],floor:["#58a6ff","breakeven floor"]};
 function priceChart(d){const box=el("div","chart");const ns="http://www.w3.org/2000/svg";const s=document.createElementNS(ns,"svg");
  const W=340,H=170,L=38,R=6,T=14,B=18;s.setAttribute("viewBox","0 0 "+W+" "+H);box.append(s);
  const pts=(d&&d.points)||[];if(pts.length<2){box.append(el("div","hint","Chart fills in as prices come in."));return box}
@@ -488,9 +538,9 @@ const OPEN_CHARTS={};
 async function toggleChart(item,id){if(OPEN_CHARTS[id]){delete OPEN_CHARTS[id];const c=item.querySelector(".chart");if(c)c.remove();const g=item.querySelector(".legend");if(g)g.remove();return}
  OPEN_CHARTS[id]="loading";try{const r=await fetch("api/chart?id="+id+"&k="+encodeURIComponent(K));OPEN_CHARTS[id]=await r.json();item.append(priceChart(OPEN_CHARTS[id]))}catch(_){delete OPEN_CHARTS[id]}}
 function openCard(p,s){const d=el("div","item");const n=link("$"+p.symbol,p.link);const w=el("div");w.append(n,el("span","tag",NAMES[p.strategy]||p.strategy));if(p.took_half)w.append(el("span","tag","sold half"));
-  d.append(w,el("b",cls(p.pnl),sgn(p.pnl)+" ("+pct(p.pnl_pct)+")"));
+  d.append(w,p.stale&&!p.liq?el("b","dim","no live price"):el("b",cls(p.pnl),sgn(p.pnl)+" ("+pct(p.pnl_pct)+")"));
   if(p.mc_in)d.append(el("div","sub","Bought at "+mcf(p.mc_in)+" · now "+(mcf(p.mc_now)||"?")));
-  if(p.risk!=null){const rk=el("div","sub","Rug risk at entry: "+Math.round(p.risk)+"%"+(p.risk>=50?" · will take a quick profit and leave":""));rk.style.color=p.risk>=50?"var(--down)":p.risk>=30?"var(--warn)":"var(--up)";d.append(rk)}
+  if(p.risk!=null){const rk=el("div","sub","Rug risk at entry: "+Math.round(p.risk)+"%");rk.style.color=p.risk>=50?"var(--down)":p.risk>=30?"var(--warn)":"var(--up)";d.append(rk)}
   {const g=el("div","stats"),S=p.stats||{};const cell=(k,v,c)=>{const b=el("div","stat");b.append(el("div","k",k),el("div","v "+(c||""),v));g.append(b)};
    const km=v=>v==null?"n/a":(v>=1e6?"$"+(v/1e6).toFixed(2)+"M":v>=1e3?"$"+(v/1e3).toFixed(1)+"K":"$"+Math.round(v));
    cell("Market cap",(mcf(p.mc_now)||"n/a").replace(" MC",""));cell("Pool",km(p.liq));
@@ -516,11 +566,12 @@ function render(s){
  const h=s.health,ok=h.last_poll_s!=null&&h.last_poll_s<120;
  $("health").replaceChildren(el("span","dot"+(ok?"":" bad")),document.createTextNode((ok?"Live":"Price feed stalled")+" · last price check "+(h.last_poll_s??"?")+"s ago · "+(h.watching??"?")+" coins watched · open trades priced "+(h.fast_s!=null?h.fast_s+"s ago":"every 30s")+" · Fomo "+(h.fomo_last_s!=null?h.fomo_last_s+"s ago":"off")));
  let all=0,today=0,unr=0,open=0;s.strategies.forEach(x=>{all+=x.current.pnl;today+=x.today.pnl;unr+=x.unrealized;open+=x.open});
- $("big").replaceChildren(stat("Closed P/L, current rules",sgn(all),cls(all)),stat("Closed P/L today",sgn(today),cls(today)),stat("Open trades P/L now",sgn(unr),cls(unr)),stat("Open trades",String(open)));
+ $("big").replaceChildren(stat("Closed P/L, "+s.strategies.map(x=>x.label.split(" (")[0]).join(" + ")+(s.strategies.some(x=>x.since)?", since last reset":", all time"),sgn(all),cls(all)),stat("Closed P/L today",sgn(today),cls(today)),stat("Open trades P/L now",sgn(unr),cls(unr)),stat("Open trades",String(open)));
  $("strats").replaceChildren(...s.strategies.map(x=>{const c=el("div","card");const top=el("div","srow");const n=el("b",null,x.label);if(x.alerts)n.append(el("span","tag","alerts on"));
   top.append(n,el("b",cls(x.current.pnl),sgn(x.current.pnl)));c.append(top);
   const r=(a,b)=>{const d=el("div","srow");d.append(el("span","dim",a),el("span",null,b));c.append(d)};
-  r(x.since?"Since rules changed "+t(x.since):"All time",x.current.trades+" trades · "+x.current.win_rate+"% win");
+  r(x.since?"Since last reset "+t(x.since):"All time",x.current.trades+" trades · "+x.current.win_rate+"% win");
+  if(x.rules_since&&x.rules)r("Current rules, since "+t(x.rules_since),x.rules.trades+" trades · "+x.rules.win_rate+"% win · "+sgn(x.rules.pnl));
   if(x.since&&x.all.trades>x.current.trades)r("All time, incl. old rules",x.all.trades+" trades · "+sgn(x.all.pnl));r("Today",x.today.trades+" trades · "+sgn(x.today.pnl));r("Open now",x.open+" · "+sgn(x.unrealized));
   c.append(spark(s.equity[x.name]));return c}));
  const o=s.open.sort((a,b)=>b.opened_at-a.opened_at);

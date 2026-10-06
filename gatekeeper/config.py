@@ -173,7 +173,13 @@ SHADOW = {
 }
 SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_age60,x_insider1,x_winscore").split(",") if x.strip() in SHADOW]
 ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main,wide,follow").split(",") if x.strip()]
-ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,follow,survivor").split(",") if x.strip() in PRESETS]
+ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,follow").split(",") if x.strip() in PRESETS]
+
+
+def _num(default, raw):
+    """A setting from the config file or a test. Whole numbers stay whole; 27.5 stays 27.5 (it used to be cut to 27)."""
+    x = float(raw)
+    return int(x) if isinstance(default, int) and x == int(x) else x
 
 
 def strategy_params(overrides=None, preset="main"):
@@ -181,18 +187,18 @@ def strategy_params(overrides=None, preset="main"):
         p = strategy_params(preset="main")    # same as Main, including your config-file settings for Main
         p.update(SHADOW[preset])
         for k, v in (overrides or {}).items():
-            p[k.upper()] = type(p[k.upper()])(float(v))
+            p[k.upper()] = _num(p[k.upper()], v)
         return p
     p = dict(STRATEGY_DEFAULTS)
     p.update(PRESETS.get(preset, {}))
     for k, v in STRATEGY_DEFAULTS.items():
         env = os.environ.get("GK_" + ("%s_" % preset.upper() if preset != "main" else "") + k)
         if env is not None and env != "":
-            p[k] = type(v)(float(env)) if isinstance(v, (int, float)) else env
+            p[k] = _num(v, env) if isinstance(v, (int, float)) else env
     if overrides:
         for k, v in overrides.items():
             k = k.upper()
             if k not in p:
                 raise KeyError("Unknown setting: " + k)
-            p[k] = type(p[k])(float(v))
+            p[k] = _num(p[k], v)
     return p

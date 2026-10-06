@@ -130,8 +130,13 @@ def socials_of(p):
     return ",".join(sorted(tags))
 
 
+class DexFailed(dict):
+    """An empty result that means "the price feed didn't answer", as opposed to "it answered and listed nothing".
+    Callers that treat a missing coin as dead or gone must check for this first."""
+
+
 async def dexscreener_batch(session, mints, chain="solana"):
-    """Up to 30 mints per call."""
+    """Up to 30 mints per call. Returns {mint: pair}; a DexFailed (empty) dict if the feed could not be reached."""
     url = DEX_TOKENS.format(CHAINS.get(chain, {}).get("dex", chain)) + ",".join(mints)
     for attempt in range(3):
         try:
@@ -141,16 +146,18 @@ async def dexscreener_batch(session, mints, chain="solana"):
                     continue
                 if r.status != 200:
                     log.warning("DexScreener %s", r.status)
-                    return {}
+                    return DexFailed()
                 return best_pairs(await r.json(content_type=None))
         except Exception as e:  # noqa: BLE001
             log.warning("DexScreener error: %s", e)
             await asyncio.sleep(2)
-    return {}
+    return DexFailed()
 
 
 def parse_rugcheck(rep):
     """Turn a RugCheck report into the handful of numbers the gates use."""
+    if not rep.get("markets") and not rep.get("topHolders"):
+        return None          # a report with neither pools nor holders is incomplete: "not checked", not "all clear"
     known = rep.get("knownAccounts") or {}
     amm = {a for a, v in known.items() if isinstance(v, dict) and str(v.get("type", "")).upper() == "AMM"}
     pool_accts = set()
@@ -191,7 +198,7 @@ def parse_rugcheck(rep):
     return {
         "mint_revoked": 1 if not rep.get("mintAuthority") else 0,
         "freeze_revoked": 1 if not rep.get("freezeAuthority") else 0,
-        "lp_locked": round(lp_locked, 2),
+        "lp_locked": round(lp_locked, 2) if rep.get("markets") else None,   # no pool list: unknown, not "0% locked"
         "top10": top10,
         "insiders": rep.get("graphInsidersDetected"),
         "danger": ", ".join(d for d in danger if d) or None,

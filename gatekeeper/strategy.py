@@ -82,6 +82,7 @@ class Position:
     moon: bool = False
     risk: float = None                 # rug-risk score at entry (0-100)
     below_since: int = 0               # when price first fell below the stop (for STOP_CONFIRM_SEC)
+    empty_since: int = 0               # when the pool first read as empty while we held it
     target_x: float = None             # data-picked profit target for this trade (ADAPTIVE_TARGETS)
 
 
@@ -100,6 +101,13 @@ class Strategy:
         self.win_model = None                # win-score model (chance of +40% before -30%), set by the runner
         self.insider_lookup = None           # mint -> number of known insider (trench) wallets that bought it (live only)
         self.on_skip = None                  # called when a coin is skipped for insiders, so the skip can be graded later
+        self.on_perm_skip = None             # called when a coin is skipped for good, so a restart doesn't forget it
+
+    def _skip(self, mint):
+        """Never buy this coin (too risky, insiders in it, low win score). Remembered across restarts."""
+        self.traded.add(mint)
+        if self.on_perm_skip:
+            self.on_perm_skip(mint)
 
     def win_score(self, cs):
         """Learned chance (0-100) this coin reaches +40% before -30%, or None if the model isn't built."""
@@ -117,7 +125,7 @@ class Strategy:
         n = self.insider_lookup(cs.mint)
         if n < need:
             return False
-        self.traded.add(cs.mint)
+        self._skip(cs.mint)
         if self.on_skip:
             self.on_skip(cs, n)
         return True
@@ -127,7 +135,17 @@ class Strategy:
         """s: snapshot dict (mint, ts, price, liq, buys_m5, sells_m5, pc_h1...).
         coin: dict with symbol, graduated_at, grad_price."""
         if not s.get("price") or not s.get("liq"):
+            # A pool that reads as empty while we hold the coin is a rug, not missing data. Give it 90 seconds in case
+            # the feed hiccuped, then book the loss for what it is instead of "selling" later at the last good price.
+            pos, cs0 = self.positions.get(s["mint"]), self.coins.get(s["mint"])
+            if pos and cs0 and s.get("ts", 0) > cs0.last_ts:
+                if not pos.empty_since:
+                    pos.empty_since = s["ts"]
+                elif s["ts"] - pos.empty_since >= 90000:
+                    return self._close(pos, cs0, s["ts"], 0.0, 0.0, "Pool emptied (counted as a total loss)")
             return []
+        if s["mint"] in self.positions:
+            self.positions[s["mint"]].empty_since = 0
         cs = self.coins.get(s["mint"])
         if cs is not None and s["ts"] <= cs.last_ts:
             return []                        # older than what we already have (two price loops overlapping)
@@ -162,7 +180,8 @@ class Strategy:
         for mint, pos in list(self.positions.items()):
             cs = self.coins.get(mint)
             if cs and now - cs.last_ts > 5 * MIN:
-                acts += self._close(pos, cs, now, cs.last_price, cs.last_liq, "No data for 5 min (pool likely gone)", panic=True)
+                # the price feed answered but no longer lists this coin: there is nothing left to sell into
+                acts += self._close(pos, cs, now, 0.0, 0.0, "Pool gone: no price for 5 min (counted as a total loss)")
         return acts
 
     # ---- entry
@@ -185,6 +204,7 @@ class Strategy:
             if not saf.get("lp_na") and (saf.get("lp_locked") or 0) < p["MIN_LP_LOCKED_PCT"]:
                 fails.append("LP %.0f%% locked" % (saf.get("lp_locked") or 0))
             if saf.get("top10") is not None and saf["top10"] > p["MAX_TOP10_PCT"]: fails.append("top 10 hold %.0f%%" % saf["top10"])
+            if saf.get("top10") is None and not str(cs.mint).startswith("0x"): fails.append("top holders unknown")
             if saf.get("insiders") is not None and saf["insiders"] > p["MAX_INSIDERS"]: fails.append("%d insiders" % saf["insiders"])
             if saf.get("danger"): fails.append("RugCheck: " + saf["danger"])
             if saf.get("creator_prev") is not None and saf["creator_prev"] > p["MAX_DEV_PREV_COINS"]:
@@ -366,11 +386,11 @@ class Strategy:
         if ws is not None:
             why.append("win score %d of 100" % ws)
             if self.p.get("WIN_FILTER") and self.win_model.get("trusted") and ws < (self.win_model.get("cut") or 0):
-                self.traded.add(cs.mint)      # the model rates this one below its top 40%: skip
+                self._skip(cs.mint)           # the model rates this one below its top 40%: skip
                 return None
         rk, usd = self.risk_and_size(cs)
         if not usd:
-            self.traded.add(cs.mint)          # too risky: skip this coin for good
+            self._skip(cs.mint)               # too risky: skip this coin for good
             return None
         if self.p.get("WIN_BOOST") and ws is not None and self.win_model.get("trusted") and ws >= (self.win_model.get("cut") or 101):
             usd = round(usd * 1.5, 2)         # the model's top picks get a bigger bet
@@ -399,7 +419,7 @@ class Strategy:
             if depth_drop > p["LIQ_PULL_PCT"] / 100:
                 return self._close(pos, cs, ts, price, liq, "Liquidity pulled (-%.0f%% of pool depth in 5 min)" % (depth_drop * 100), panic=True)
         gain = (price / pos.spot_at_entry - 1) * 100 if pos.spot_at_entry else 0
-        if not pos.moon and pos.target_x and price >= pos.spot_at_entry * pos.target_x:
+        if not pos.moon and pos.target_x and not p.get("TAKE_PROFIT_PCT") and price >= pos.spot_at_entry * pos.target_x:
             return self._core_exit(pos, cs, ts, price, liq, "Hit data target %gx (rug risk %.0f%%)" % (pos.target_x, pos.risk or 0))
         if not pos.moon and not pos.target_x and p.get("RUG_TP_PCT") and pos.risk is not None and pos.risk >= p["RUG_RISK_MIN"] and gain >= p["RUG_TP_PCT"]:
             return self._close(pos, cs, ts, price, liq, "Quick profit: rug risk %.0f%%, took +%.0f%% and left" % (pos.risk, gain))
@@ -433,7 +453,8 @@ class Strategy:
                 and price < pos.peak_after * 0.9):
             return self._close(pos, cs, ts, price, liq, "Heavy selling (%s sells vs %s buys in 5 min)" % (s.get("sells_m5"), s.get("buys_m5")))
         if p.get("BREAKEVEN_AT_PCT") and best * 100 >= p["BREAKEVEN_AT_PCT"]:
-            floor = entry * (1 + 2 * (p["FEE_PCT"] + p["PENALTY_PCT"]) / 100)
+            c = (p["FEE_PCT"] + p["PENALTY_PCT"]) / 100
+            floor = entry * (1 + c) / (1 - c)             # what the price must be for a sale to return the stake
             if price <= floor:
                 return self._core_exit(pos, cs, ts, price, liq, "Protected gain (was up %.0f%%)" % (best * 100))
         if p.get("LOCK_START_PCT") and best * 100 >= p["LOCK_START_PCT"] and price <= pos.peak_after * (1 - p["LOCK_TRAIL_PCT"] / 100):

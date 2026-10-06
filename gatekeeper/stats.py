@@ -77,14 +77,16 @@ def build(r, con=None, trench_text=None):
             "rug_model": {k: v for k, v in (r.rug_model or {}).items() if k != "counts"}, "reports": parts}
     order = ["settings", "status", "today", "week", "experiments", "ai", "hold", "exits", "winscore", "bounce", "risk", "moonshots", "traders", "trench", "research", "trends", "events"]
     md = ["# Gatekeeper stats: %s" % data["generated_local"], "",
-          "Open paper trades: %d · strategies: %s" % (len(open_), ", ".join(r.strats)), ""]
+          "Open paper trades: %d in Main/Follow, %d in experiment bots (Hold bot and AI trader are listed in their own sections) · running: %s" % (
+              sum(1 for o in open_ if o["strategy"] not in config.SHADOW), sum(1 for o in open_ if o["strategy"] in config.SHADOW),
+              ", ".join(r.strats)), ""]
     for k in order:
         md += ["## " + k.title(), "```", parts.get(k, ""), "```", ""]
     md += ["## Last 25 closed trades", "| When | Strategy | Coin | P/L | Exit |", "|---|---|---|---|---|"]
     for c in closed[:25]:
         md.append("| %s | %s | $%s | %+.0f%% ($%.2f) | %s |" % (
             datetime.fromtimestamp(c["closed_at"] / 1000, report.TZ).strftime("%m-%d %H:%M"), c["run_id"] or "main",
-            c["symbol"], c["pnl_pct"] or 0, c["pnl_usd"] or 0, (c["exit_reason"] or "").replace("|", "/")[:60]))
+            (c["symbol"] or "?").replace("|", "/"), c["pnl_pct"] or 0, c["pnl_usd"] or 0, (c["exit_reason"] or "").replace("|", "/")[:60]))
     return data, "\n".join(md)
 
 

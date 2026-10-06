@@ -107,7 +107,11 @@ class Trends:
         self.r = runner
         self.state = {"updated": 0, "trump": [], "news": [], "hot": [], "profiles": [], "matches": [], "suggestions": [], "words": []}
         self.seen_trump = set()
-        self.alerted = {}
+        try:                       # kept across restarts so a pick isn't re-sent after every update
+            from . import db as _db
+            self.alerted = {k: int(v) for k, v in json.loads(_db.kv_get(runner.con, "trends_alerted") or "{}").items()}
+        except Exception:  # noqa: BLE001
+            self.alerted = {}
 
     # ------------------------------------------------------------------ collect
     async def collect(self):
@@ -298,6 +302,11 @@ class Trends:
             if now - self.alerted.get(c["address"], 0) < 12 * 3600 * 1000 or c["score"] < 10:
                 continue
             self.alerted[c["address"]] = now
+            try:
+                from . import db as _db
+                _db.kv_set(self.r.con, "trends_alerted", json.dumps(dict(list(self.alerted.items())[-300:])))
+            except Exception:  # noqa: BLE001
+                pass
             mc = notify.mcap(1, c["mc"]) if c.get("mc") else "?"
             await notify.send(self.r.session, "📰 <b>Trend pick: $%s</b> at %s\n%s\n%s\nWorth a look, not a buy signal. Check the chart." % (
                 html.escape(c["symbol"]), mc, html.escape(" · ".join(c["reasons"])), notify.dex_link(c["address"], c["chain"])))

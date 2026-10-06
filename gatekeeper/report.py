@@ -5,12 +5,14 @@ from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+import html
+
 from . import config
 from .notify import money
 from .strategy import summarize
 
 TZ = ZoneInfo(config.TIMEZONE)
-LABEL = {"main": "Main (strict rules)", "wide": "Wide (newer coins, looser)", "follow": "Follow (copies your Fomo traders)", "momentum": "Momentum (day-trader style)", "survivor": "Survivor (4h+ coins climbing steadily)", "moonshot": "Moonshot Hunter ($20 bets on early 10x signs)",
+LABEL = {"main": "Main", "wide": "Wide (newer coins, looser)", "follow": "Follow (copies your Fomo traders)", "momentum": "Momentum (day-trader style)", "survivor": "Survivor (4h+ coins climbing steadily)", "moonshot": "Moonshot Hunter ($20 bets on early 10x signs)",
          "x_all40": "Test: sell all at +40%", "x_trail10": "Test: tighter lock (10% trail)", "x_skip35": "Test: stricter rug skip (35%)", "x_noinsider": "Test: no insider rule", "x_insider1": "Test: skip if any insider wallet is in", "x_scalp20": "Test: quick scalp, sell all at +20%", "x_scalp30": "Test: quick scalp, sell all at +30%", "x_winscore": "Test: only buys high win scores", "x_aggro": "Smart aggressive", "x_swing": "Swing (holds for days)", "x_stop40": "Test: wider stop loss (-40%)", "x_stopwait": "Test: stop waits 3 minutes", "x_age60": "Test: buys from 60 minutes old", "x_best": "Best of: stop -40% and pool $15K+"}
 
 
@@ -54,18 +56,43 @@ def funnel_lines(con, since_ms):
     checked = con.execute("SELECT COUNT(*) n FROM safety WHERE checked_at>=?", (since_ms,)).fetchone()["n"]
     passed = con.execute("SELECT COUNT(*) n FROM safety WHERE checked_at>=? AND mint_revoked=1 AND freeze_revoked=1 "
                          "AND lp_locked>=90 AND danger IS NULL", (since_ms,)).fetchone()["n"]
-    traded = con.execute("SELECT COUNT(DISTINCT mint) n FROM trades WHERE mode='live' AND opened_at>=?", (since_ms,)).fetchone()["n"]
+    traded = con.execute("SELECT COUNT(DISTINCT mint) n FROM trades WHERE mode='live' AND opened_at>=? AND COALESCE(run_id,'main') IN (%s)"
+                         % ",".join("?" * len(config.ENABLED_PRESETS)), [since_ms] + list(config.ENABLED_PRESETS)).fetchone()["n"]
     rugs = con.execute("SELECT COUNT(*) n FROM coins WHERE graduated_at>=? AND status='dead'", (since_ms,)).fetchone()["n"]
     return ["<b>Coin funnel</b>",
             "Launched on pump.fun: %s" % format(created, ","),
             "Graduated to a real pool: %s" % format(grad, ","),
             "Died or drained already: %s" % format(rugs, ","),
             "Safety-checked: %d · passed basic safety: %d" % (checked, passed),
-            "Traded by at least one strategy: %d" % traded]
+            "Traded by %s: %d" % (" or ".join(LABEL.get(n, n).split(" (")[0] for n in config.ENABLED_PRESETS), traded)]
+
+
+def rules_changed(con, name):
+    """When this strategy's rules last changed (ms), or 0 if never recorded."""
+    r = con.execute("SELECT v FROM kv WHERE k=?", ("rules_changed_" + name,)).fetchone()
+    try:
+        return int(float(r["v"])) if r else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def other_bots_lines(con):
+    """One line each for the bots that keep their own books (they are not in the numbers above)."""
+    out = []
+    for table, label in (("hold_trades", "Hold bot ($300, established coins)"), ("ai_trades", "AI trader")):
+        try:
+            c = con.execute("SELECT COUNT(*) n, COALESCE(SUM(pnl_usd),0) p, COALESCE(SUM(pnl_usd>0),0) w FROM %s WHERE closed_at IS NOT NULL" % table).fetchone()
+            o = con.execute("SELECT COUNT(*) n FROM %s WHERE closed_at IS NULL" % table).fetchone()["n"]
+        except Exception:  # noqa: BLE001
+            continue
+        out.append("%s: %s · %d open" % (label, "%d closed, %d won, %s all time" % (c["n"], c["w"], money(c["p"])) if c["n"] else "no closed trades yet", o))
+    return out
 
 
 def period_text(con, hours=24, header=True):
     since = int(time.time() * 1000) - hours * 3600 * 1000
+    if not header and hours == 24:
+        header = True                     # every report says which window it covers
     label = "Last 24 hours" if hours == 24 else ("Since the start" if hours > 24 * 365 else "Last %d days" % (hours // 24))
     out = ["<b>%s</b>" % label] if header else []
     total = 0
@@ -76,37 +103,46 @@ def period_text(con, hours=24, header=True):
                              (name,)).fetchone()["n"]
         out.append("\n<b>%s</b>" % LABEL.get(name, name))
         out += stats_lines(s, compact=hours <= 24)
+        rc = rules_changed(con, name)
+        if rc > since and s.get("trades"):
+            # the window reaches back before the last rule change: show the current rules on their own too
+            cur = summarize(_closed(con, rc, name))
+            out.append("⚠️ Includes trades made under older rules. Current rules (since %s): %s" % (
+                datetime.fromtimestamp(rc / 1000, TZ).strftime("%b %-d"),
+                "%d trades · %.0f%% win · %s" % (cur["trades"], cur["win_rate"], money(cur["total_pnl"])) if cur.get("trades") else "no closed trades yet"))
         out.append("Open right now: %d" % n_open)
     if hours <= 24 * 7:
         out.append("")
         out += funnel_lines(con, since)
-    all_trades = max(len(_closed(con, None, n)) for n in config.ENABLED_PRESETS) if config.ENABLED_PRESETS else 0
-    if all_trades < 100:
-        out.append("\nTrades so far (best strategy): %d of the 100 needed before judging the rules." % all_trades)
+    ob = other_bots_lines(con)
+    if ob:
+        out += ["", "<b>Other paper bots</b> (own books, not counted above)"] + ob
+    main_now = len(_closed(con, rules_changed(con, "main") or None, "main"))
+    if main_now < 100:
+        out.append("\nMain under its current rules: %d closed trades of the 100 needed before judging them." % main_now)
     return "\n".join(out)
 
 
 def experiments_text(con):
-    """Main vs its silent test copies, side by side (since each copy started)."""
-    names = ["main"] + list(config.SHADOW_PRESETS)
-    rows = []
-    start = None
+    """Each silent test copy against Main over the SAME window (from that copy's first trade)."""
+    L = ["🧪 <b>Experiments</b> (paper, no alerts). Each line compares one test bot with Main over the same days."]
+    any_ = False
     for n in config.SHADOW_PRESETS:
         r = con.execute("SELECT MIN(opened_at) t FROM trades WHERE mode='live' AND run_id=?", (n,)).fetchone()
-        if r and r["t"]:
-            start = r["t"] if start is None else min(start, r["t"])
-    L = ["🧪 <b>Experiments</b> (paper, no alerts)" + (" since %s" % datetime.fromtimestamp(start / 1000, TZ).strftime("%b %-d %-I:%M %p") if start else "")]
-    if not start:
-        L.append("No experiment trades yet. They trade the same coins as Main, so they start when Main finds its next coin.")
-        return "\n".join(L)
-    for n in names:
-        s = summarize(_closed(con, start, n))
-        if not s.get("trades"):
-            L.append("%s: no closed trades yet" % LABEL.get(n, n))
+        t0 = r["t"] if r else None
+        if not t0:
+            L.append("%s: no trades yet" % LABEL.get(n, n))
             continue
-        L.append("%s: %d trades · %.0f%% win · %s (%s a trade)" % (LABEL.get(n, n).replace("Main (strict rules)", "Main (as set)"), s["trades"],
-                 s["win_rate"], money(s["total_pnl"]), money(s["avg_pnl"])))
-    L.append("Same coins, different exits. After about a week, the best one becomes Main.")
+        any_ = True
+        s, m = summarize(_closed(con, t0, n)), summarize(_closed(con, t0, "main"))
+        def fmt(x):
+            return "%d trades · %.0f%% win · %s" % (x["trades"], x["win_rate"], money(x["total_pnl"])) if x.get("trades") else "no closed trades"
+        L.append("<b>%s</b> (since %s): %s\n   Main, same days: %s" % (
+            LABEL.get(n, n), datetime.fromtimestamp(t0 / 1000, TZ).strftime("%b %-d"), fmt(s), fmt(m)))
+    if not any_:
+        L.append("They start trading when a coin passes their rules.")
+    L.append("Each test bot is Main with one rule changed, so it can buy coins Main skips or skip coins Main buys. "
+             "Small samples: do not act on fewer than about 30 trades.")
     return "\n".join(L)
 
 
@@ -145,9 +181,13 @@ def status_text(con, strats=None):
             mins = (now - r["opened_at"]) // 60000
             spot = json.loads(r["legs"] or "[{}]")[0].get("spot")
             chg = " · {:+.0f}% since entry".format((cur / spot - 1) * 100) if cur and spot else ""
-            lines.append("${} [{}]{} · {}m".format(r["symbol"], name, chg, mins))
+            lines.append("${} [{}]{} · {}m".format(html.escape(r["symbol"] or "?"), name, chg, mins))
     else:
-        lines.append("No open paper trades.")
+        lines.append("No open paper trades in Main or Follow.")
+    n_exp = sum(1 for r in con.execute("SELECT run_id FROM trades WHERE mode='live' AND closed_at IS NULL") if (r["run_id"] or "main") in config.SHADOW)
+    if n_exp:
+        lines.append("Experiment bots: %d open" % n_exp)
+    lines += other_bots_lines(con)
     return "\n".join(lines)
 
 
@@ -156,9 +196,10 @@ def exits_text(con, days=3):
     versus kept falling (the exit saved us). Plus the full-loss rugs and their rug-risk score at entry."""
     import re
     since = int(time.time() * 1000) - days * 86400000
-    rows = con.execute("SELECT * FROM trades WHERE mode='live' AND closed_at IS NOT NULL AND closed_at>=?", (since,)).fetchall()
+    rows = con.execute("SELECT * FROM trades WHERE mode='live' AND closed_at IS NOT NULL AND closed_at>=? AND COALESCE(run_id,'main')='main' "
+                       "AND COALESCE(exit_reason,'') NOT LIKE 'Closed:%'", (since,)).fetchall()
     if not rows:
-        return "No closed trades in the last %d days." % days
+        return "No closed Main trades in the last %d days." % days
     by = {}
     rugs = []
     for r in rows:
@@ -170,8 +211,8 @@ def exits_text(con, days=3):
         exit_px = sells[-1]["spot"]
         after = con.execute("SELECT MAX(price) hi, MIN(price) lo FROM snapshots WHERE mint=? AND ts>? AND ts<=?",
                             (r["mint"], r["closed_at"], r["closed_at"] + 3600000)).fetchone()
-        later = con.execute("SELECT price FROM snapshots WHERE mint=? AND ts>=? ORDER BY ts LIMIT 1",
-                            (r["mint"], r["closed_at"] + 3600000)).fetchone()
+        later = con.execute("SELECT price FROM snapshots WHERE mint=? AND ts>=? AND ts<=? ORDER BY ts LIMIT 1",
+                            (r["mint"], r["closed_at"] + 3600000, r["closed_at"] + 2 * 3600000)).fetchone()
         b = by.setdefault(reason, {"n": 0, "pnl": 0.0, "early": 0, "saved": 0, "known": 0, "h1": []})
         if later and later["price"]:
             b["h1"].append((later["price"] / exit_px - 1) * 100)
@@ -188,7 +229,7 @@ def exits_text(con, days=3):
         if (r["pnl_pct"] or 0) <= -70:
             m = re.search(r"rug risk (\d+)%", r["why_entered"] or "")
             rugs.append((r["symbol"], r["pnl_usd"] or 0, int(m.group(1)) if m else None, r["run_id"] or "main"))
-    L = ["🔍 <b>How the exits did</b> (last %d days)" % days,
+    L = ["🔍 <b>How Main's exits did</b> (last %d days, Main only)" % days,
          "Per exit: trades · profit · coin rose 20%+ within 1h after we sold (too early) · fell another 20%+ (exit saved us)\n"]
     for reason, b in sorted(by.items(), key=lambda kv: -kv[1]["n"]):
         k = b["known"] or 1
@@ -204,6 +245,6 @@ def exits_text(con, days=3):
         if scored:
             hi = sum(1 for x in scored if x[2] >= 50)
             L.append("Rug risk at entry: %s · %d of %d were scored 50%%+" % (
-                ", ".join("$%s %d%%" % (x[0], x[2]) for x in scored[:8]), hi, len(scored)))
+                ", ".join("$%s %d%%" % (html.escape(x[0] or "?"), x[2]) for x in scored[:8]), hi, len(scored)))
     L.append("\nAn exit that's 'too early' far more often than it 'saved us' is the one to loosen.")
     return "\n".join(L)

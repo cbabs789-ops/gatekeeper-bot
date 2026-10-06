@@ -49,6 +49,7 @@ def _b(name, v):
 
 def features(row):
     f = risk.features(row)
+    f.pop("age", None)        # trained only on 2h and 4h coins: a younger coin's age must not count as a signal
     b, s = row.get("buys5") or 0, row.get("sells5") or 0
     f["buy5"] = _b("buy5", b / (b + s) if b + s else None)
     f["mc"] = _b("mc", row.get("fdv"))
@@ -110,7 +111,9 @@ def score(model, row):
     n_w, n_l = model["wins"], model["n"] - model["wins"]
     logit = math.log(model["prior"] / (1 - model["prior"]))
     for k, v in features(row).items():
-        c = counts.get(k, {}).get(v, {"w": 0, "l": 0})
+        if v not in counts.get(k, {}):
+            continue                                   # a reading the model never saw says nothing either way
+        c = counts[k][v]
         vals = max(2, len(counts.get(k, {})))
         logit += math.log(((c["w"] + 1) / (n_w + vals)) / ((c["l"] + 1) / (n_l + vals)))
     return round(100 / (1 + math.exp(-max(-30, min(30, logit)))))

@@ -136,10 +136,22 @@ async def _send_one(session, text, chat_id=None, token=None):
         if thread:
             body["message_thread_id"] = thread
         async with session.post(API.format(token, "sendMessage"), json=body, timeout=aiohttp.ClientTimeout(total=15)) as r:
-            if r.status != 200:
-                log.warning("Telegram send failed %s: %s", r.status, (await r.text())[:200])
+            if r.status == 200:
+                return True
+            err = (await r.text())[:200]
+            log.warning("Telegram send failed %s: %s", r.status, err)
+            if r.status != 400:
                 return False
-            return True
+        # Telegram rejected the formatting (a stray < or & in a coin name, or a message over its length limit).
+        # A plain, shortened message that arrives beats a formatted one that silently never does.
+        plain = html.unescape(re.sub(r"<[^>]{0,200}>", "", text))[:3900]
+        body = {"chat_id": chat_id, "text": plain, "disable_web_page_preview": True}
+        if thread:
+            body["message_thread_id"] = thread
+        async with session.post(API.format(token, "sendMessage"), json=body, timeout=aiohttp.ClientTimeout(total=15)) as r:
+            if r.status != 200:
+                log.warning("Telegram plain resend failed %s: %s", r.status, (await r.text())[:200])
+            return r.status == 200
     except Exception as e:  # noqa: BLE001
         log.warning("Telegram error: %s", e)
         return False

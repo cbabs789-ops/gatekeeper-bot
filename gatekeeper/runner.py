@@ -13,7 +13,7 @@ import html
 import re
 
 from . import analyst, bounce, check, config, db, events, fomo, followtest, hold, notify, report, research, risk, stats, sweep, trench, trends, web, winmodel
-from .sources import CHAINS, EVM_RE, SOL_RE, dexscreener_batch, pair_to_snapshot, pumpportal_stream, safety_check
+from .sources import CHAINS, EVM_RE, SOL_RE, DexFailed, dexscreener_batch, pair_to_snapshot, pumpportal_stream, safety_check
 from .strategy import MIN, PaperBroker, Position, Strategy
 
 log = logging.getLogger("gatekeeper")
@@ -28,9 +28,12 @@ def safety_worse(old, new):
     if old.get("mint_revoked") and not new.get("mint_revoked"): out.append("mint authority turned on")
     if old.get("freeze_revoked") and not new.get("freeze_revoked"): out.append("freeze or blacklist turned on")
     if new.get("danger") and new.get("danger") != old.get("danger"): out.append(str(new["danger"])[:80])
-    if (new.get("top10") or 0) >= (old.get("top10") or 0) + 10: out.append("top 10 holders jumped to %.0f%%" % new["top10"])
-    if not new.get("lp_na") and (old.get("lp_locked") or 0) >= 90 and (new.get("lp_locked") or 0) < 50: out.append("LP unlocked")
-    if (new.get("insiders") or 0) >= (old.get("insiders") or 0) + 10: out.append("insider wallets jumped to %d" % new["insiders"])
+    # a number that is simply missing from one of the two reports is not a red flag: compare only real readings
+    def both(k):
+        return old.get(k) is not None and new.get(k) is not None
+    if both("top10") and new["top10"] >= old["top10"] + 10: out.append("top 10 holders jumped to %.0f%%" % new["top10"])
+    if not new.get("lp_na") and both("lp_locked") and old["lp_locked"] >= 90 and new["lp_locked"] < 50: out.append("LP unlocked")
+    if both("insiders") and new["insiders"] >= old["insiders"] + 10: out.append("insider wallets jumped to %d" % new["insiders"])
     return "; ".join(out) or None
 
 
@@ -79,6 +82,7 @@ class Runner:
             self._epoch(name, st)
         for name, st in self.strats.items():
             self._restore(name, st)
+        self._replay = None
         self._close_orphans()
 
     def _load_routes(self):
@@ -134,7 +138,7 @@ class Runner:
                                 % ",".join("?" * len(live)), live).fetchall()
         p = self.p
         for r in rows:
-            snap = self.con.execute("SELECT ts, price, liq FROM snapshots WHERE mint=? ORDER BY ts DESC LIMIT 1", (r["mint"],)).fetchone()
+            snap = self.con.execute("SELECT ts, price, liq FROM snapshots WHERE mint=? AND price>0 AND liq>0 ORDER BY ts DESC LIMIT 1", (r["mint"],)).fetchone()
             legs = json.loads(r["legs"] or "[]")
             proceeds = sum(l.get("usd") or 0 for l in legs[1:] if l.get("side") == "sell")
             sold = sum(l.get("qty") or 0 for l in legs[1:] if l.get("side") == "sell")
@@ -161,6 +165,12 @@ class Runner:
             ep = now_ms() if custom else 0
         elif old != h and config.os.environ.get("GK_AUTO_RESET", "0") == "1":
             ep = now_ms()                     # off by default: the count only restarts when you send /reset
+        # Remember WHEN the rules last changed, so reports can say which numbers belong to the current rules.
+        # (This does not reset the dashboard count; only /reset does that.)
+        if old is not None and old != h:
+            db.kv_set(self.con, "rules_changed_" + name, now_ms())
+        elif name == "main" and db.kv_get(self.con, "rules_changed_main") is None:
+            db.kv_set(self.con, "rules_changed_main", 1791145200000)       # Oct 4 2026: Main moved to skip rug risk 35%+
         db.kv_set(self.con, "rules_hash_" + name, h)
         if str(int(float(ep or 0))) != str(db.kv_get(self.con, "rules_since_" + name)):
             db.kv_set(self.con, "rules_since_prev_" + name, db.kv_get(self.con, "rules_since_" + name) or 0)
@@ -174,7 +184,9 @@ class Runner:
     def _restore(self, name, strat):
         since = now_ms() - 6 * 3600 * 1000
         coins = {r["mint"]: dict(r) for r in self.con.execute("SELECT * FROM coins WHERE status='watching'")}
-        rows = self.con.execute("SELECT * FROM snapshots WHERE ts>=? ORDER BY ts", (since,)).fetchall()
+        if getattr(self, "_replay", None) is None:      # read once, replay into every strategy (was re-read per strategy)
+            self._replay = self.con.execute("SELECT * FROM snapshots WHERE ts>=? ORDER BY ts", (since,)).fetchall()
+        rows = self._replay
         saved_max = strat.p["MAX_OPEN"]
         strat.p["MAX_OPEN"] = 0                      # rebuild peaks and history without trading
         for r in rows:
@@ -185,6 +197,13 @@ class Runner:
         sel = "mode='live' AND COALESCE(run_id,'main')=?"
         for r in self.con.execute("SELECT mint FROM trades WHERE " + sel, (name,)):
             strat.traded.add(r["mint"])
+        # coins this strategy decided to skip for good (too risky, insiders, low win score): a restart must not forget
+        self.con.execute("CREATE TABLE IF NOT EXISTS skips (run_id TEXT, mint TEXT, ts INTEGER, PRIMARY KEY (run_id, mint))")
+        self.con.execute("DELETE FROM skips WHERE ts<?", (now_ms() - 3 * 86400000,))
+        for r in self.con.execute("SELECT mint FROM skips WHERE run_id=?", (name,)):
+            strat.traded.add(r["mint"])
+        strat.on_perm_skip = lambda mint, _n=name: self.con.execute(
+            "INSERT OR IGNORE INTO skips VALUES(?,?,?)", (_n, mint, now_ms()))
         for r in self.con.execute("SELECT * FROM trades WHERE " + sel + " AND closed_at IS NULL", (name,)):
             legs = json.loads(r["legs"] or "[]")
             pos = Position(r["mint"], r["symbol"], r["opened_at"], r["entry_price"], legs[0]["spot"] if legs else r["entry_price"],
@@ -198,7 +217,7 @@ class Runner:
                         pos.moon = True
             cs = strat.coins.get(r["mint"])
             # the highest price SINCE WE BOUGHT, not the coin's all-time high (that made restarts fake a "was up 30%" and sell)
-            hi = self.con.execute("SELECT MAX(price) FROM snapshots WHERE mint=? AND ts>=?", (r["mint"], r["opened_at"])).fetchone()[0]
+            hi = self.con.execute("SELECT MAX(price) FROM snapshots WHERE mint=? AND ts>=? AND liq>0", (r["mint"], r["opened_at"])).fetchone()[0]
             pos.peak_after = max(pos.spot_at_entry, hi or 0)
             m = re.search(r"rug risk (\d+)%", pos.why or "")
             pos.risk = float(m.group(1)) if m else None
@@ -251,8 +270,12 @@ class Runner:
             cm = [m for m in mints if (coins[m].get("chain") or "solana") == chain]
             batches += [(chain, cm[i:i + 30]) for i in range(0, len(cm), 30)]
         risk_snaps = {}
+        feed_down = False
         for bi, (chain, batch) in enumerate(batches):
             pairs = await dexscreener_batch(self.session, batch, chain)
+            if isinstance(pairs, DexFailed):
+                seen.update(batch)             # the feed didn't answer: unknown, not dead
+                feed_down = True
             for mint, pair in pairs.items():
                 if mint not in coins:
                     continue
@@ -320,7 +343,8 @@ class Runner:
             except Exception:  # noqa: BLE001
                 log.exception("Bounce model build failed")
         for name, st in self.strats.items():
-            for a in st.on_tick(now):
+            # "no price for 5 minutes" only means the pool is gone if the feed was actually answering
+            for a in ([] if feed_down else st.on_tick(now)):
                 await self.act(a, name)
             if self.tick % 20 == 0:
                 st.prune(now, 30 * MIN)
@@ -342,7 +366,10 @@ class Runner:
                     batch = [m for m in mints if m in coins and (coins[m].get("chain") or "solana") == chain]
                     if not batch:
                         continue
-                    for mint, pair in (await dexscreener_batch(self.session, batch[:30], chain)).items():
+                    pairs = {}
+                    for i in range(0, len(batch), 30):
+                        pairs.update(await dexscreener_batch(self.session, batch[i:i + 30], chain))
+                    for mint, pair in pairs.items():
                         if mint not in coins:
                             continue
                         snap = pair_to_snapshot(mint, pair, now)
@@ -409,6 +436,13 @@ class Runner:
         r = self.con.execute("SELECT price, fdv FROM snapshots WHERE mint=? AND price>0 AND fdv>0 ORDER BY ts DESC LIMIT 1", (mint,)).fetchone()
         return r["fdv"] / r["price"] if r else None
 
+    def _bg(self, coro):
+        """Send in the background: a slow Telegram call must never hold up the loop that watches prices and stops."""
+        t = asyncio.create_task(coro)
+        self._tasks = getattr(self, "_tasks", set())
+        self._tasks.add(t)
+        t.add_done_callback(self._tasks.discard)
+
     async def act(self, a, name="main"):
         pos = a["pos"]
         alert = name in config.ALERT_PRESETS
@@ -429,16 +463,16 @@ class Runner:
             if name == "main":                 # the AI trader gives its own verdict on everything Main buys
                 asyncio.create_task(self.analyst.on_main_buy(pos))
             if alert:
-                await notify.send(self.session, tag + notify.fmt_buy(pos, a["spot"], a["liq"], self.strats[name].p, self.supply(pos.mint)))
+                self._bg(notify.send(self.session, tag + notify.fmt_buy(pos, a["spot"], a["liq"], self.strats[name].p, self.supply(pos.mint))))
         elif a["type"] == "partial":
             self.con.execute("UPDATE trades SET legs=? WHERE id=?", (json.dumps(pos.legs), pos.trade_id))
             if alert:
-                await notify.send(self.session, tag + notify.fmt_partial(pos, a["spot"], a["usd"], a.get("why"), self.supply(pos.mint)))
+                self._bg(notify.send(self.session, tag + notify.fmt_partial(pos, a["spot"], a["usd"], a.get("why"), self.supply(pos.mint))))
         elif a["type"] == "close":
             self.con.execute("UPDATE trades SET closed_at=?, proceeds_usd=?, pnl_usd=?, pnl_pct=?, exit_reason=?, legs=? WHERE id=?",
                              (pos.closed_at, pos.proceeds, pos.pnl_usd, pos.pnl_pct, pos.exit_reason, json.dumps(pos.legs), pos.trade_id))
             if alert:
-                await notify.send(self.session, tag + notify.fmt_close(pos, a["spot"], a["reason"], self.supply(pos.mint)))
+                self._bg(notify.send(self.session, tag + notify.fmt_close(pos, a["spot"], a["reason"], self.supply(pos.mint))))
         try:
             web.HUB.publish({"type": a["type"], "strategy": name, "symbol": pos.symbol,
                              "usd": round(a.get("usd") or (pos.size_usd if a["type"] == "buy" else pos.proceeds), 2),
@@ -486,7 +520,8 @@ class Runner:
                                      (addr, snap["_symbol"], snap["_name"], int(created), snap["price"], now_ms(), chain, now_ms()))
                 coin = dict(self.con.execute("SELECT * FROM coins WHERE mint=?", (addr,)).fetchone())
                 for name, st in self.strats.items():
-                    st.on_snapshot(dict(snap), coin)
+                    for a in st.on_snapshot(dict(snap), coin):     # a buy or exit triggered here must be recorded
+                        await self.act(a, name)
                     if kind == "cluster" and st.p.get("ENTRY_MODE") == "signal":
                         a = st.signal_enter(addr, "Fomo cluster: " + ", ".join("@" + h for h, _ in buyers[:4]))
                         if a:
@@ -742,7 +777,7 @@ class Runner:
                     text = (msg.get("text") or "").strip()
                     if cmd in ("/check", "check", "/c"):
                         asyncio.create_task(self.run_check(text.split(None, 1)[1] if len(text.split(None, 1)) > 1 else ""))
-                    elif not text.startswith("/") and len(text.split()) <= 2 and check.find_address(text)[0]:
+                    elif not text.startswith("/") and cmd != "pick" and len(text.split()) <= 2 and check.find_address(text)[0]:
                         asyncio.create_task(self.run_check(text))      # a pasted contract address or coin link on its own
                     elif cmd == "/setup":
                         await self.setup_topics(msg)
@@ -834,7 +869,7 @@ class Runner:
                             days = 7
                         asyncio.create_task(self.run_sweep(days))
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the dashboard P/L count for a strategy (history is kept)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/check COIN: the bot's verdict on any coin (paste its contract address, a Fomo or DexScreener link, or $TICKER)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/events: upcoming speeches, summits and signings, and the coins that could move\n/experiments: how the test copies of Main are doing (sell all at +40%, tighter trail, stricter rug skip)\n/winscore: what the win-score model has learned (chance of +40% before -30%)\n/ai: the AI trader: judges coins like a person, with its reasons and results\n/pick COIN: have the AI trader judge one of your own ideas (it buys on paper if it agrees)\n/hold: the Hold bot: $300 paper bets on established coins, held for days\n/bounce: can the bot tell a shake-out from a real dump when the stop loss hits\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early\n/publish: push a stats snapshot to GitHub now\n/setup: (send inside a Telegram group with Topics on) sort alerts into topics\n/unsetup: move alerts back to this private chat")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the website's since-last-reset P/L count for a strategy (history is kept; Telegram reports are not affected)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/check COIN: the bot's verdict on any coin (paste its contract address, a Fomo or DexScreener link, or $TICKER)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/events: upcoming speeches, summits and signings, and the coins that could move\n/experiments: each test copy of Main against Main over the same days\n/winscore: what the win-score model has learned (chance of +40% before -30%)\n/ai: the AI trader: judges coins like a person, with its reasons and results\n/pick COIN: have the AI trader judge one of your own ideas (it buys on paper if it agrees)\n/hold: the Hold bot: $300 paper bets on established coins, held for days\n/bounce: can the bot tell a shake-out from a real dump when the stop loss hits\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early\n/publish: push a stats snapshot to GitHub now\n/setup: (send inside a Telegram group with Topics on) sort alerts into topics\n/unsetup: move alerts back to this private chat")
                     elif cmd.startswith("/"):
                         await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
                 notify.REPLY.set(None)

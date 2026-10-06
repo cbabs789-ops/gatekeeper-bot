@@ -18,7 +18,6 @@ VARIANTS = [
     # --- the winner, loosened to find more trades (it only made 7 in 5 days) ---
     ("Main + rug score, 60+ min old", {"MIN_AGE_MIN": 60}, "main", True),
     ("Main + rug score, 90+ min old", {"MIN_AGE_MIN": 90}, "main", True),
-    ("Main + rug score, up to 24h old", {"MAX_AGE_MIN": 1440}, "main", True),
     ("Main + rug score, pool $30K+ (the old setting)", {"MIN_LIQ_USD": 30000}, "main", True),
     ("Main + rug score, pool $15K+", {"MIN_LIQ_USD": 15000}, "main", True),
     ("Main + rug score, top 10 at 25%", {"MAX_TOP10_PCT": 25}, "main", True),
@@ -34,9 +33,6 @@ VARIANTS = [
     ("Main + rug score, sell all at +60%", {"TAKE_PROFIT_PCT": 60}, "main", True),
     ("Main + rug score, sell all at +30% with a tighter lock (trail 10%)", {"LOCK_TRAIL_PCT": 10}, "main", True),
     ("Main + rug score, half at +40% then trail 10%", {"TAKE_HALF_X": 1.4, "LOCK_TRAIL_PCT": 10, "TAKE_PROFIT_PCT": 0}, "main", True),
-    ("Smart aggressive (up to 24h old, sell all +30%, 10% trail, buys winners again)",
-     {"MAX_AGE_MIN": 1440, "TAKE_PROFIT_PCT": 30, "LOCK_TRAIL_PCT": 10, "MAX_HOLD_MIN": 240, "REENTER_MIN": 20, "REENTER_MAX": 2}, "main", True),
-    ("Smart aggressive without buying again", {"MAX_AGE_MIN": 1440, "TAKE_PROFIT_PCT": 30, "LOCK_TRAIL_PCT": 10, "MAX_HOLD_MIN": 240}, "main", True),
     # --- the stop loss: live stop-outs filled at -40% or worse on a -30% stop ---
     ("Main + rug score, stop loss at -20%", {"STOP_LOSS_PCT": 20}, "main", True),
     ("Main + rug score, stop loss at -40%", {"STOP_LOSS_PCT": 40}, "main", True),
@@ -49,28 +45,73 @@ VARIANTS = [
 ]
 
 
-def run(days=7, progress=None):
-    con = db.connect()
-    coins = {r["mint"]: dict(r) for r in con.execute("SELECT * FROM coins")}
-    # Safety as it was known AT THE TIME. The safety table only keeps each coin's latest check, which can include a
-    # danger flag or a holder jump that appeared after the bot would have bought. So build a timeline per coin from
-    # the check log (kept since Oct 6) and from the vital signs recorded at 30, 60, 120 and 240 minutes old.
+def safety_timeline(con):
+    """Safety as it was known AT THE TIME, per coin: [(ts, check), ...] oldest first.
+    The safety table only keeps each coin's latest check, which can include a danger flag or a holder jump that
+    appeared after the bot would have bought. So this uses the check log (kept since Oct 6) and the vital signs
+    recorded at 30, 60, 120 and 240 minutes old."""
     con.executescript(db.SAFETY_LOG)
     timeline = {}
     for r in con.execute("SELECT * FROM safety_log ORDER BY checked_at"):
         timeline.setdefault(r["mint"], []).append((r["checked_at"], dict(r)))
-    logged = set(timeline)
-    for r in con.execute("SELECT mint, ts, top10, insiders, lp_ok, auth_ok, danger, dev_prev, dev_dead FROM coin_features ORDER BY ts"):
-        if r["mint"] in logged:
-            continue
+    for r in con.execute("SELECT mint, ts, top10, insiders, lp_ok, auth_ok, danger, dev_prev, dev_dead, socials FROM coin_features ORDER BY ts"):
+        if r["top10"] is None and r["insiders"] is None and not r["auth_ok"]:
+            continue                      # no safety check had come back yet at this checkpoint: unknown, not "failed"
         timeline.setdefault(r["mint"], []).append((r["ts"], {
+            "_socials": r["socials"],
             "mint": r["mint"], "checked_at": r["ts"], "mint_revoked": r["auth_ok"], "freeze_revoked": r["auth_ok"], "lp_na": 0,
             "lp_locked": 100 if r["lp_ok"] else 0, "top10": r["top10"], "insiders": r["insiders"],
             "danger": "flagged" if r["danger"] else None, "creator_prev": r["dev_prev"], "creator_dead": r["dev_dead"]}))
     for m in timeline:
         timeline[m].sort(key=lambda x: x[0])
-    known, upto = {}, {}                  # what each coin's safety check said as of the replay's current moment
-    look = lambda m: known.get(m)  # noqa: E731
+    return timeline
+
+
+class Known:
+    """What each coin's safety check said as of the replay's current moment."""
+
+    def __init__(self, timeline):
+        self.tl, self.now, self.upto = timeline, {}, {}
+
+    def get(self, mint):
+        return self.now.get(mint)
+
+    def advance(self, mint, ts, coin=None):
+        tl = self.tl.get(mint)
+        if not tl:
+            return
+        i = self.upto.get(mint, 0)
+        while i < len(tl) and tl[i][0] <= ts:
+            self.now[mint] = tl[i][1]
+            if coin is not None and tl[i][1].get("_socials") is not None:
+                coin["socials"] = tl[i][1]["_socials"]      # socials as they were then, not as they are today
+            i += 1
+        self.upto[mint] = i
+
+
+class TestStrategy(Strategy):
+    """The live bot keeps recording any coin it holds. The recorded history does not: a coin stops being recorded
+    when it dies, or at 12 hours old. So when a test trade's data runs out, say honestly what that means."""
+    coin_status = None
+
+    def on_tick(self, now):
+        acts = []
+        for mint, pos in list(self.positions.items()):
+            cs = self.coins.get(mint)
+            if not cs or now - cs.last_ts <= 5 * 60000:
+                continue
+            if ((self.coin_status or {}).get(mint) or {}).get("status") == "dead":
+                acts += self._close(pos, cs, now, 0.0, 0.0, "Pool gone (counted as a total loss)")
+            else:
+                acts += self._close(pos, cs, now, cs.last_price, cs.last_liq, "Recording ended (result unknown, left out)")
+        return acts
+
+
+def run(days=7, progress=None):
+    con = db.connect()
+    coins = {r["mint"]: dict(r) for r in con.execute("SELECT * FROM coins")}
+    known = Known(safety_timeline(con))
+    look = known.get
     strats = []
     from . import risk
     risky = []
@@ -79,8 +120,8 @@ def run(days=7, progress=None):
         preset = v[2] if len(v) > 2 else "main"
         use_risk = len(v) > 3 and v[3]
         p = config.strategy_params(ov, preset)
-        p["MAX_OPEN"] = 1000          # don't let open slots decide which trades a variant takes
-        st = Strategy(p, look)
+        st = TestStrategy(p, look)    # keeps the preset's own limit on open trades, the same as live
+        st.coin_status = coins
         if use_risk:
             risky.append(st)
         strats.append((label, st))
@@ -121,25 +162,21 @@ def run(days=7, progress=None):
         c = coins.get(s["mint"])
         if not c:
             continue
-        tl = timeline.get(s["mint"])
-        if tl:
-            i = upto.get(s["mint"], 0)
-            while i < len(tl) and tl[i][0] <= s["ts"]:
-                known[s["mint"]] = tl[i][1]
-                i += 1
-            upto[s["mint"]] = i
+        known.advance(s["mint"], s["ts"], c)
         for _, st in strats:
             st.on_snapshot(s, c)
         n += 1
-    out = []
+    out, unknown = [], 0
     for label, st in strats:
         for mint, pos in list(st.positions.items()):
             cs = st.coins[mint]
             st._close(pos, cs, cs.last_ts, cs.last_price, cs.last_liq, "Still open at the end")
-        first = [c for c in st.closed if c.opened_at < mid]
-        second = [c for c in st.closed if c.opened_at >= mid]
-        out.append((label, summarize(st.closed), summarize(first), summarize(second)))
-    return {"rows": n, "from": lo_hi["a"], "to": lo_hi["b"], "results": out, "honest": honest, "model_n": (model or {}).get("n", 0)}
+        real = [c for c in st.closed if not (c.exit_reason or "").startswith("Recording ended")]
+        unknown += len(st.closed) - len(real) if label.startswith("Current Main + rug") else 0
+        first = [c for c in real if c.opened_at < mid]
+        second = [c for c in real if c.opened_at >= mid]
+        out.append((label, summarize(real), summarize(first), summarize(second)))
+    return {"rows": n, "from": lo_hi["a"], "to": lo_hi["b"], "results": out, "unknown": unknown, "honest": honest, "model_n": (model or {}).get("n", 0)}
 
 
 def text(res):
@@ -151,7 +188,9 @@ def text(res):
          "A rule is only real if both halves are positive.",
          ("The second half is the honest one: the rug score was learned only from %s coins that finished before it began.\n" % format(res.get("model_n", 0), ","))
          if res.get("honest") else "Not enough older coins yet for an honest rug score, so these results flatter the rug-score lines.\n",
-         "Safety checks are replayed as they were known at the time, not as they look today.\n"]
+         "Safety checks are replayed as they were known at the time, not as they look today.",
+         "Not in this test (live only): the insider-wallet skip and the safety re-check exit."
+         + (" %d trades left out because recording stopped before they finished." % res["unknown"] if res.get("unknown") else "") + "\n"]
     ranked = sorted(res["results"], key=lambda r: (r[3].get("total_pnl", 0) if r[3].get("trades") else -1e9), reverse=True)
     for label, all_, a, b in ranked:
         if not all_.get("trades"):

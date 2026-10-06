@@ -12,6 +12,7 @@ How it works (free sources only):
 Ideas to watch, not buy signals.
 """
 import asyncio
+import json
 import html
 import logging
 import re
@@ -104,7 +105,10 @@ class Events:
     def __init__(self, runner):
         self.r = runner
         self.state = {"updated": 0, "events": []}
-        self.alerted = {}          # event key -> 'found' / 'today'
+        try:                       # event key -> 'found' / 'today'. Kept across restarts so an alert is sent once.
+            self.alerted = json.loads(db.kv_get(runner.con, "events_alerted") or "{}")
+        except Exception:  # noqa: BLE001
+            self.alerted = {}
         self.coin_cache = {}       # word -> (ts, cards)
 
     async def coins_for(self, words):
@@ -230,6 +234,10 @@ class Events:
             L.append("\nThe move usually happens in the minutes after the headline, and news coins often dump right after. Plan your exit before you buy.")
             await notify.send(self.r.session, "\n".join(L))
             self.alerted[e["key"]] = "today" if is_today else "found"
+            try:
+                db.kv_set(self.r.con, "events_alerted", json.dumps(dict(list(self.alerted.items())[-300:])))
+            except Exception:  # noqa: BLE001
+                pass
             if is_today:
                 # grade these as the bot's own picks so we learn whether event coins actually pay
                 for c in e["coins"]:

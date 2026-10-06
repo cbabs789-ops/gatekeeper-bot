@@ -25,7 +25,7 @@ from datetime import datetime
 import aiohttp
 
 from . import db, fomo, notify, risk, winmodel
-from .sources import dexscreener_batch, pair_to_snapshot, safety_check
+from .sources import DexFailed, dexscreener_batch, pair_to_snapshot, safety_check
 
 log = logging.getLogger("gatekeeper.analyst")
 API = "https://api.anthropic.com/v1/messages"
@@ -89,6 +89,15 @@ def km(x):
     return "$%.1fM" % (x / 1e6) if x >= 1e6 else "$%.0fK" % (x / 1e3) if x >= 1e3 else "$%.0f" % x
 
 
+def _n(x, default):
+    """A number from the AI's answer, even if it wrote "20%" or "2 of 3". Falls back to the default."""
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        m = re.search(r"-?\d+(\.\d+)?", str(x or ""))
+        return float(m.group(0)) if m else default
+
+
 def parse_json(text):
     m = re.search(r"\{.*\}", text or "", re.S)
     if not m:
@@ -122,11 +131,13 @@ class Analyst:
         self.key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
         self.calls = []                    # timestamps of recent AI calls (rate limit)
         self.busy = set()                  # mints being reviewed right now
+        self.miss = {}                     # trade id -> minutes in a row with no price
         self.last_error = ""
 
     # ---- spending guard
     def _day(self):
-        return "ai_spend_" + datetime.now().strftime("%Y-%m-%d")
+        from .report import TZ                  # the same day boundary as the rest of the bot (local time, not UTC)
+        return "ai_spend_" + datetime.now(TZ).strftime("%Y-%m-%d")
 
     def spent_today(self, con=None):
         return float(db.kv_get(con or self.con, self._day()) or 0)
@@ -260,7 +271,7 @@ class Analyst:
 
     def _log(self, mint, sym, source, d, price, cost):
         self.con.execute("INSERT INTO ai_reviews(ts,mint,symbol,source,decision,conviction,thesis,flags,price,cost) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                         (int(time.time() * 1000), mint, sym, source, str(d.get("decision", "?"))[:10], int(d.get("conviction") or 0),
+                         (int(time.time() * 1000), mint, sym, source, str(d.get("decision", "?")).lower()[:10], int(_n(d.get("conviction"), 0)),
                           str(d.get("thesis") or d.get("reason") or "")[:600], ", ".join(str(x) for x in (d.get("red_flags") or []))[:300], price, cost))
 
     async def consider(self, mint, chain, source, extra="", force=False):
@@ -273,8 +284,10 @@ class Analyst:
         opens = self.open_trades()
         if any(t["mint"] == mint for t in opens):
             return "The AI trader already holds that coin."
-        if not force:
-            last = self.con.execute("SELECT MAX(ts) FROM ai_reviews WHERE mint=? AND source!='manage'", (mint,)).fetchone()[0]
+        if not force and source != "main":
+            # (a coin Main just bought is ALWAYS reviewed, even when the AI trader is full, so the second-opinion
+            #  scorecard covers every Main trade and not an arbitrary subset)
+            last = self.con.execute("SELECT MAX(ts) FROM ai_reviews WHERE mint=? AND source=?", (mint, source)).fetchone()[0]
             if last and now - last < 6 * HOUR:
                 return "Reviewed recently."
             if len(opens) >= MAX_OPEN:
@@ -288,7 +301,9 @@ class Analyst:
             d, cost = await self.ask(text + "\n\n" + BUY_FORMAT)
             sym = snap.get("_symbol") or "?"
             if not d:
-                return "The AI trader couldn't review $%s: %s" % (sym, self.last_error or "no answer")
+                if cost:                      # paid for an answer it couldn't read: log it so it isn't asked again and again
+                    self._log(mint, sym, source, {"decision": "error", "thesis": self.last_error}, snap["price"], cost)
+                return "The AI trader couldn't review $%s: %s" % (html.escape(sym), html.escape(self.last_error or "no answer"))
             self._log(mint, sym, source, d, snap["price"], cost)
             thesis = str(d.get("thesis") or "")[:500]
             if str(d.get("decision")).lower() != "buy":
@@ -296,10 +311,15 @@ class Analyst:
                 return "🧠 AI trader passed on $%s.\n%s%s" % (html.escape(sym), html.escape(thesis), "\nRed flags: " + html.escape(flags) if flags else "")
             if len(self.open_trades()) >= MAX_OPEN:
                 return "🧠 AI trader liked $%s but is full (%d open trades).\n%s" % (html.escape(sym), MAX_OPEN, html.escape(thesis))
-            conv = min(3, max(1, int(d.get("conviction") or 1)))
-            stop = min(35, max(10, float(d.get("stop_pct") or 25)))
-            horizon = min(168, max(1, float(d.get("horizon_hours") or 24)))
+            conv = int(min(3, max(1, _n(d.get("conviction"), 1))))
+            stop = min(35, max(10, _n(d.get("stop_pct"), 25)))
+            horizon = min(168, max(1, _n(d.get("horizon_hours"), 24)))
             price, liq = snap["price"], snap["liq"] or 0
+            fdv = snap.get("fdv") or 0
+            if not price or price <= 0 or liq < 5000 or fdv < liq:
+                # never buy on numbers that can't be right (no price, a pool too small to sell into, a cap below its pool)
+                return "🧠 AI trader liked $%s but the data looks wrong (price %s, pool %s, cap %s), so it did not buy.\n%s" % (
+                    html.escape(sym), price, km(liq), km(fdv), html.escape(thesis))
             cost_pct = 1.5 if liq >= 300000 else 3.0          # deep pools fill better than thin ones
             self.con.execute(
                 "INSERT INTO ai_trades(mint,chain,symbol,source,opened_at,entry_price,entry_liq,size_usd,peak,stop_price,horizon_h,thesis,cost_pct,last_review,last_review_price) "
@@ -308,7 +328,8 @@ class Analyst:
             msg = "🟢 <b>PAPER BUY</b> [AI trader] $%s · $%d (conviction %d of 3)\n%s\nPlan: stop at -%.0f%%, hold up to %s · cap %s · pool %s\n%s" % (
                 html.escape(sym), SIZES[conv], conv, html.escape(thesis), stop,
                 "%.0f hours" % horizon if horizon < 48 else "%.0f days" % (horizon / 24), km(snap.get("fdv")), km(liq), notify.dex_link(mint, chain))
-            await notify.send(self.r.session, msg)
+            if source != "pick":              # a /pick answer is sent once, by the command handler
+                await notify.send(self.r.session, msg)
             return msg
         finally:
             self.busy.discard(mint)
@@ -329,53 +350,65 @@ class Analyst:
         for chain in {t["chain"] for t in opens}:
             mine = [t for t in opens if t["chain"] == chain]
             pairs = await dexscreener_batch(self.r.session, [t["mint"] for t in mine], chain)
+            if isinstance(pairs, DexFailed):
+                continue                        # the price feed didn't answer: try again next minute
             for t in mine:
-                pair = pairs.get(t["mint"]) or {}
-                try:
-                    price = float(pair.get("priceUsd") or 0)
-                except (TypeError, ValueError):
-                    price = 0
-                liq = float((pair.get("liquidity") or {}).get("usd") or 0)
-                if not price:
-                    continue
-                peak = max(t["peak"] or 0, price)
-                if peak != t["peak"]:
-                    self.con.execute("UPDATE ai_trades SET peak=? WHERE id=?", (peak, t["id"]))
-                # --- the guard rails: these fire without asking the AI
-                if price <= t["stop_price"]:
-                    await self.close(t, price, "Stop hit (set at %+.0f%% from entry)" % ((t["stop_price"] / t["entry_price"] - 1) * 100), now)
-                    continue
-                if liq and t["entry_liq"] and liq < t["entry_liq"] * 0.5:
-                    await self.close(t, price, "Pool collapsed to %s from %s" % (km(liq), km(t["entry_liq"])), now)
-                    continue
-                if now - t["opened_at"] >= t["horizon_h"] * HOUR:
-                    await self.close(t, price, "Reached its planned holding time", now)
-                    continue
-                # --- otherwise let the AI re-read the chart now and then
-                every = 3 * HOUR if (t["entry_liq"] or 0) >= 300000 else 20 * MIN
-                moved = abs(price / (t["last_review_price"] or price) - 1) >= 0.15
-                since = now - (t["last_review"] or t["opened_at"])
-                if since < every and not (moved and since >= 5 * MIN):
-                    continue
-                gain = (price / t["entry_price"] - 1) * 100
-                extra = ("YOUR POSITION: bought %.1f hours ago, now %+.0f%% from your entry, best so far %+.0f%%, your stop sits at %+.0f%% from entry. "
-                         "Your reason for buying: %s" % ((now - t["opened_at"]) / HOUR, gain, (peak / t["entry_price"] - 1) * 100,
-                                                        (t["stop_price"] / t["entry_price"] - 1) * 100, t["thesis"] or ""))
-                text, _ = await self.brief(t["mint"], t["chain"], pair, extra)
-                d, cost = await self.ask(text + "\n\n" + HOLD_FORMAT, max_tokens=250)
-                self.con.execute("UPDATE ai_trades SET last_review=?, last_review_price=? WHERE id=?", (now, price, t["id"]))
-                if not d:
-                    continue
-                self._log(t["mint"], t["symbol"], "manage", d, price, cost)
-                if str(d.get("decision")).lower() == "sell":
-                    await self.close(t, price, "AI sold: %s" % str(d.get("reason") or "")[:240], now)
-                    continue
-                try:
-                    new_stop = t["entry_price"] * (1 + float(d.get("stop_vs_entry_pct")) / 100)
-                except (TypeError, ValueError):
-                    new_stop = 0
-                if t["stop_price"] < new_stop < price * 0.97:          # a stop only ever moves up, and stays under the price
-                    self.con.execute("UPDATE ai_trades SET stop_price=? WHERE id=?", (new_stop, t["id"]))
+                try:                            # one bad trade must never stop the others from being watched
+                    await self._manage_one(t, pairs.get(t["mint"]) or {}, now)
+                except Exception:  # noqa: BLE001
+                    log.exception("AI trader: managing $%s failed", t.get("symbol"))
+
+    async def _manage_one(self, t, pair, now):
+        try:
+            price = float(pair.get("priceUsd") or 0)
+        except (TypeError, ValueError):
+            price = 0
+        liq = float((pair.get("liquidity") or {}).get("usd") or 0)
+        if not price or not t["entry_price"]:
+            # the feed answered and does not list this coin. Ten minutes of that means the pool is gone.
+            self.miss[t["id"]] = self.miss.get(t["id"], 0) + 1
+            if self.miss[t["id"]] >= 10 or not t["entry_price"]:
+                await self.close(t, 0.0, "Pool gone: no price for 10 minutes (counted as a total loss)", now)
+            return
+        self.miss.pop(t["id"], None)
+        peak = max(t["peak"] or 0, price)
+        if peak != t["peak"]:
+            self.con.execute("UPDATE ai_trades SET peak=? WHERE id=?", (peak, t["id"]))
+        # --- the guard rails: these fire without asking the AI
+        if price <= t["stop_price"]:
+            await self.close(t, price, "Stop hit (set at %+.0f%% from entry)" % ((t["stop_price"] / t["entry_price"] - 1) * 100), now)
+            return
+        if liq and t["entry_liq"] and liq < t["entry_liq"] * 0.5:
+            await self.close(t, price, "Pool collapsed to %s from %s" % (km(liq), km(t["entry_liq"])), now)
+            return
+        if now - t["opened_at"] >= t["horizon_h"] * HOUR:
+            await self.close(t, price, "Reached its planned holding time", now)
+            return
+        # --- otherwise let the AI re-read the chart now and then
+        every = 3 * HOUR if (t["entry_liq"] or 0) >= 300000 else 20 * MIN
+        moved = abs(price / (t["last_review_price"] or price) - 1) >= 0.15
+        since = now - (t["last_review"] or t["opened_at"])
+        if since < every and not (moved and since >= 5 * MIN):
+            return
+        gain = (price / t["entry_price"] - 1) * 100
+        extra = ("YOUR POSITION: bought %.1f hours ago, now %+.0f%% from your entry, best so far %+.0f%%, your stop sits at %+.0f%% from entry. "
+                 "Your reason for buying: %s" % ((now - t["opened_at"]) / HOUR, gain, (peak / t["entry_price"] - 1) * 100,
+                                                (t["stop_price"] / t["entry_price"] - 1) * 100, t["thesis"] or ""))
+        text, _ = await self.brief(t["mint"], t["chain"], pair, extra)
+        d, cost = await self.ask(text + "\n\n" + HOLD_FORMAT, max_tokens=250)
+        self.con.execute("UPDATE ai_trades SET last_review=?, last_review_price=? WHERE id=?", (now, price, t["id"]))
+        if not d:
+            return
+        self._log(t["mint"], t["symbol"], "manage", d, price, cost)
+        if str(d.get("decision")).lower() == "sell":
+            await self.close(t, price, "AI sold: %s" % str(d.get("reason") or "")[:240], now)
+            return
+        try:
+            new_stop = t["entry_price"] * (1 + _n(d.get("stop_vs_entry_pct"), None) / 100)
+        except (TypeError, ValueError):
+            new_stop = 0
+        if t["stop_price"] < new_stop < price * 0.97:          # a stop only ever moves up, and stays under the price
+            self.con.execute("UPDATE ai_trades SET stop_price=? WHERE id=?", (new_stop, t["id"]))
 
     async def on_main_buy(self, pos):
         """Main just bought this coin: get the AI's second opinion (and its own trade if it agrees)."""
