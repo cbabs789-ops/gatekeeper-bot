@@ -506,7 +506,7 @@ function closedCard(c){const d=el("div","item");const w=el("div");w.append(link(
   d.append(tradeLog(c.log));
   d.classList.add("tap");d.onclick=e=>{if(e.target.closest("a"))return;toggleChart(d,c.id)};
   const cached=OPEN_CHARTS[c.id];if(cached&&cached!=="loading")d.append(priceChart(cached));return d}
-const SHADOW={};let XBOT="x_best";
+const SHADOW={};let XBOT="x_age60";
 function render(s){
  s.strategies.forEach(x=>{if(x.shadow)SHADOW[x.name]=1});
  const X={strategies:s.strategies.filter(x=>x.shadow),open:s.open.filter(p=>SHADOW[p.strategy]),closed:s.closed.filter(c=>SHADOW[c.strategy])};

@@ -56,7 +56,7 @@ def run(days=7, progress=None):
     look = lambda m: safety.get(m)  # noqa: E731
     strats = []
     from . import risk
-    model = risk.load(con) or None
+    risky = []
     for v in VARIANTS:
         label, ov = v[0], v[1]
         preset = v[2] if len(v) > 2 else "main"
@@ -64,16 +64,23 @@ def run(days=7, progress=None):
         p = config.strategy_params(ov, preset)
         p["MAX_OPEN"] = 1000          # don't let open slots decide which trades a variant takes
         st = Strategy(p, look)
-        if use_risk and model and model.get("counts"):
-            st.risk_model = model
-        elif use_risk:
-            label += " (no rug model yet)"
+        if use_risk:
+            risky.append(st)
         strats.append((label, st))
     since = int(time.time() * 1000) - days * 86400000
     lo_hi = con.execute("SELECT MIN(ts) a, MAX(ts) b FROM snapshots WHERE ts>=?", (since,)).fetchone()
     if not lo_hi["a"]:
         return None
     mid = lo_hi["a"] + (lo_hi["b"] - lo_hi["a"]) // 2
+    # The rug score must not know the future. Learn it only from coins that finished BEFORE the second half starts,
+    # so the second half is a true test. (Until Oct 6 this used today's model, which had already seen every coin
+    # in the test: that made every "rug score" line look better than it could be live.)
+    model = risk.build(con, until=mid, save=False)
+    honest = bool(model.get("counts"))
+    if not honest:
+        model = risk.load(con) or None
+    for st in risky:
+        st.risk_model = model
     # coins that can't pass basic safety never get traded by any variant, so skip them
     q = ("SELECT * FROM snapshots WHERE ts>=? AND mint IN (SELECT mint FROM safety WHERE mint_revoked=1 "
          "AND freeze_revoked=1 AND danger IS NULL) ORDER BY ts")
@@ -106,7 +113,7 @@ def run(days=7, progress=None):
         first = [c for c in st.closed if c.opened_at < mid]
         second = [c for c in st.closed if c.opened_at >= mid]
         out.append((label, summarize(st.closed), summarize(first), summarize(second)))
-    return {"rows": n, "from": lo_hi["a"], "to": lo_hi["b"], "results": out}
+    return {"rows": n, "from": lo_hi["a"], "to": lo_hi["b"], "results": out, "honest": honest, "model_n": (model or {}).get("n", 0)}
 
 
 def text(res):
@@ -115,7 +122,9 @@ def text(res):
     hours = (res["to"] - res["from"]) / 3600000
     L = ["🧪 <b>Rule test</b> on %.1f days of recorded coins (%s snapshots)" % (hours / 24, format(res["rows"], ",")),
          "Each line: trades · win rate · total profit · first half / second half",
-         "A rule is only real if both halves are positive.\n"]
+         "A rule is only real if both halves are positive.",
+         ("The second half is the honest one: the rug score was learned only from %s coins that finished before it began.\n" % format(res.get("model_n", 0), ","))
+         if res.get("honest") else "Not enough older coins yet for an honest rug score, so these results flatter the rug-score lines.\n"]
     ranked = sorted(res["results"], key=lambda r: (r[3].get("total_pnl", 0) if r[3].get("trades") else -1e9), reverse=True)
     for label, all_, a, b in ranked:
         if not all_.get("trades"):

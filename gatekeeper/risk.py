@@ -173,10 +173,10 @@ def backfill(con, days=14, progress=None):
 
 
 # ------------------------------------------------------------------ model
-def build(con, days=21):
+def build(con, days=21, until=None, save=True):
     """Count drain rates per vital sign from finished rows. Returns the model dict (also saved in kv)."""
     ensure(con)
-    now = int(time.time() * 1000)
+    now = until or int(time.time() * 1000)          # until: learn only from coins before this moment (for honest tests)
     rows = [dict(r) for r in con.execute("SELECT * FROM coin_features WHERE ts<? AND ts>?",
                                          (now - LABEL_AFTER_MS, now - days * 86400000))]
     rugs = [r for r in rows if rugged(r)]
@@ -195,7 +195,8 @@ def build(con, days=21):
             # only use a data target when it actually made money; a "least bad" losing target is worse than trailing
             if best and n >= 100 and best[1] > 0:
                 model["targets"][label] = best[0]
-    db.kv_set(con, "rug_model", json.dumps(model))
+    if save:
+        db.kv_set(con, "rug_model", json.dumps(model))
     return model
 
 
