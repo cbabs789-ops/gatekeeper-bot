@@ -14,7 +14,7 @@ from datetime import datetime
 
 import aiohttp
 
-from . import bounce, config, db, fomo, report, research, risk, winmodel
+from . import bounce, config, db, fomo, playbook, report, research, risk, winmodel
 
 log = logging.getLogger("gatekeeper.stats")
 API = "https://api.github.com/repos/{}/contents/{}"
@@ -60,6 +60,7 @@ def build(r, con=None, trench_text=None):
     safe("hold", lambda: r.hold.text(con) if getattr(r, "hold", None) else "")
     safe("moonshots", lambda: risk.moonshots_text(con))
     safe("traders", lambda: fomo.scorecard_text(con))
+    safe("playbook", lambda: playbook.report(con))
     safe("research", lambda: research.text(con))
     safe("trench", lambda: trench_text if trench_text is not None else r.trench.text())
     safe("events", lambda: r.events.plain() if getattr(r, "events", None) else "")
@@ -75,7 +76,7 @@ def build(r, con=None, trench_text=None):
     data = {"generated": int(time.time() * 1000), "generated_local": now.strftime("%Y-%m-%d %H:%M %Z"),
             "strategies": list(r.strats), "epochs": getattr(r, "epochs", {}), "open": open_, "closed_recent": closed,
             "rug_model": {k: v for k, v in (r.rug_model or {}).items() if k != "counts"}, "reports": parts}
-    order = ["settings", "status", "today", "week", "experiments", "ai", "hold", "exits", "winscore", "bounce", "risk", "moonshots", "traders", "trench", "research", "trends", "events"]
+    order = ["settings", "status", "today", "week", "experiments", "ai", "hold", "exits", "winscore", "bounce", "risk", "moonshots", "traders", "playbook", "trench", "research", "trends", "events"]
     md = ["# Gatekeeper stats: %s" % data["generated_local"], "",
           "Open paper trades: %d in Main/Follow, %d in experiment bots (Hold bot and AI trader are listed in their own sections) · running: %s" % (
               sum(1 for o in open_ if o["strategy"] not in config.SHADOW), sum(1 for o in open_ if o["strategy"] in config.SHADOW),
