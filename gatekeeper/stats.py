@@ -107,10 +107,44 @@ async def put(session, path, text, message):
             raise RuntimeError("GitHub %s: %s" % (r.status, (await r.text())[:200]))
 
 
-async def publish(r):
+def export_csv(con):
+    """The raw records, for analysis outside the bot: every closed paper trade, and every recorded coin at the ages
+    Main buys (2h and 4h old) with what it looked like then and what it did next."""
+    import csv
+    import io
+
+    def dump(sql, args=()):
+        cur = con.execute(sql, args)
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow([d[0] for d in cur.description])
+        w.writerows(cur)
+        return buf.getvalue()
+
+    trades = dump("SELECT id, COALESCE(run_id,'main') AS bot, symbol, mint, opened_at, closed_at, size_usd, entry_price, "
+                  "ROUND(pnl_usd,2) AS pnl_usd, ROUND(pnl_pct,1) AS pnl_pct, exit_reason, why_entered "
+                  "FROM trades WHERE mode='live' AND closed_at IS NOT NULL ORDER BY closed_at")
+    coins = dump("SELECT * FROM coin_features WHERE t_min IN (120, 240) AND liq>=10000 AND ts>? ORDER BY ts",
+                 (int(time.time() * 1000) - 30 * 86400000,))
+    other = ""
+    for table in ("hold_trades", "ai_trades", "ai_reviews"):
+        try:
+            other += "## %s\n%s\n" % (table, dump("SELECT * FROM %s" % table))
+        except Exception:  # noqa: BLE001
+            pass
+    return {"data/trades.csv": trades, "data/coins.csv": coins, "data/other_bots.txt": other}
+
+
+async def publish(r, full=False):
     tt = r.trench.text() if getattr(r, "trench", None) else ""
     data, md = await asyncio.to_thread(lambda: build(r, db.connect(), tt))
     msg = "Stats %s" % data["generated_local"]
+    if full:
+        for path, text in (await asyncio.to_thread(lambda: export_csv(db.connect()))).items():
+            try:
+                await put(r.session, path, text, msg)
+            except Exception as e:  # noqa: BLE001
+                log.warning("Data export %s failed: %s", path, e)
     await put(r.session, "latest.md", md, msg)
     await put(r.session, "latest.json", json.dumps(data, indent=1, default=str), msg)
     await put(r.session, "history/%s.md" % datetime.now(report.TZ).strftime("%Y-%m-%d"), md, msg)
@@ -123,9 +157,11 @@ async def loop(r):
         return
     await asyncio.sleep(180)
     first = True
+    n = 0
     while True:
         try:
-            when = await publish(r)
+            when = await publish(r, full=(n % 24 == 0))      # the raw records go up at start and every 6 hours
+            n += 1
             if first:
                 from . import notify
                 await notify.send(r.session, "📤 Stats now publish every 15 minutes to github.com/%s (latest %s)." % (repo(), when))

@@ -815,7 +815,7 @@ class Runner:
                             await notify.send(self.session, "\n".join(L))
                     elif cmd in ("/publish", "publish"):
                         try:
-                            when = await stats.publish(self)
+                            when = await stats.publish(self, full=True)
                             await notify.send(self.session, "📤 Stats published (%s)." % when)
                         except Exception as e:  # noqa: BLE001
                             await notify.send(self.session, "📤 Publish failed: %s" % html.escape(str(e)[:200]))
