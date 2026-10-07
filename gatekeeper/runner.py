@@ -156,21 +156,37 @@ class Runner:
 
     def _epoch(self, name, st):
         """When a strategy's rules last changed, so results can be shown for the current rules only."""
-        h = hashlib.sha1(json.dumps(st.p, sort_keys=True, default=str).encode()).hexdigest()[:12]
+        cur = json.loads(json.dumps(st.p, sort_keys=True, default=str))
+        h = hashlib.sha1(json.dumps(cur, sort_keys=True).encode()).hexdigest()[:12]
         old, ep = db.kv_get(self.con, "rules_hash_" + name), db.kv_get(self.con, "rules_since_" + name)
+        # A rule only "changed" if a setting this bot already had now has a different value. A brand-new setting added by an
+        # update (used only by some other bot) is not a change. Without the saved settings we cannot tell, so we assume no change.
+        try:
+            prev = json.loads(db.kv_get(self.con, "rules_params_" + name) or "null")
+        except (TypeError, ValueError):
+            prev = None
+        changed = isinstance(prev, dict) and any(k in cur and cur[k] != v for k, v in prev.items())
+        if db.kv_get(self.con, "rules_fix_oct7_" + name) is None:
+            # One-time repair: the Oct 7 update added settings for the Strength bot, which wrongly restarted every bot's
+            # "current rules" date. Main's rules last really changed on Oct 4; the others had no recorded change.
+            rc = int(float(db.kv_get(self.con, "rules_changed_" + name) or 0))
+            if rc >= 1791345600000:
+                db.kv_set(self.con, "rules_changed_" + name, 1791145200000 if name == "main" else 0)
+            db.kv_set(self.con, "rules_fix_oct7_" + name, 1)
         if old is None:
             # first run with this feature: rules customized in the config file count as changed now
             pre = "GK_" + ("%s_" % name.upper() if name != "main" else "")
             custom = any(config.os.environ.get(pre + k) not in (None, "") for k in config.STRATEGY_DEFAULTS)
             ep = now_ms() if custom else 0
-        elif old != h and config.os.environ.get("GK_AUTO_RESET", "0") == "1":
+        elif changed and config.os.environ.get("GK_AUTO_RESET", "0") == "1":
             ep = now_ms()                     # off by default: the count only restarts when you send /reset
         # Remember WHEN the rules last changed, so reports can say which numbers belong to the current rules.
         # (This does not reset the dashboard count; only /reset does that.)
-        if old is not None and old != h:
+        if changed:
             db.kv_set(self.con, "rules_changed_" + name, now_ms())
         elif name == "main" and db.kv_get(self.con, "rules_changed_main") is None:
             db.kv_set(self.con, "rules_changed_main", 1791145200000)       # Oct 4 2026: Main moved to skip rug risk 35%+
+        db.kv_set(self.con, "rules_params_" + name, json.dumps(cur, sort_keys=True))
         db.kv_set(self.con, "rules_hash_" + name, h)
         if str(int(float(ep or 0))) != str(db.kv_get(self.con, "rules_since_" + name)):
             db.kv_set(self.con, "rules_since_prev_" + name, db.kv_get(self.con, "rules_since_" + name) or 0)
