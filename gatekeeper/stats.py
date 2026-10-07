@@ -102,7 +102,7 @@ async def put(session, path, text, message):
     body = {"message": message, "content": base64.b64encode(text.encode()).decode()}
     if sha:
         body["sha"] = sha
-    async with session.put(url, headers=headers, json=body, timeout=aiohttp.ClientTimeout(total=30)) as r:
+    async with session.put(url, headers=headers, json=body, timeout=aiohttp.ClientTimeout(total=180)) as r:
         if r.status not in (200, 201):
             raise RuntimeError("GitHub %s: %s" % (r.status, (await r.text())[:200]))
 
@@ -140,11 +140,21 @@ async def publish(r, full=False):
     data, md = await asyncio.to_thread(lambda: build(r, db.connect(), tt))
     msg = "Stats %s" % data["generated_local"]
     if full:
-        for path, text in (await asyncio.to_thread(lambda: export_csv(db.connect()))).items():
+        note = []
+        try:
+            files = await asyncio.to_thread(lambda: export_csv(db.connect()))
+        except Exception as e:  # noqa: BLE001
+            files, note = {}, ["could not build the export: %s" % str(e)[:150]]
+        for path, text in files.items():
             try:
                 await put(r.session, path, text, msg)
+                note.append("%s ok (%d KB)" % (path, len(text) // 1024))
             except Exception as e:  # noqa: BLE001
                 log.warning("Data export %s failed: %s", path, e)
+                note.append("%s FAILED: %s" % (path, str(e)[:150]))
+        r.export_note = "%s: %s" % (data["generated_local"], "; ".join(note))
+    if getattr(r, "export_note", None):         # say in the feed itself whether the raw records went up
+        md = md.replace("\n", "\nRaw data export, %s\n" % r.export_note, 1)
     await put(r.session, "latest.md", md, msg)
     await put(r.session, "latest.json", json.dumps(data, indent=1, default=str), msg)
     await put(r.session, "history/%s.md" % datetime.now(report.TZ).strftime("%Y-%m-%d"), md, msg)
