@@ -13,7 +13,7 @@ from .strategy import summarize
 
 TZ = ZoneInfo(config.TIMEZONE)
 LABEL = {"main": "Main", "wide": "Wide (newer coins, looser)", "follow": "Follow (copies your Fomo traders)", "momentum": "Momentum (day-trader style)", "survivor": "Survivor (4h+ coins climbing steadily)", "moonshot": "Moonshot Hunter ($20 bets on early 10x signs)",
-         "x_all40": "Test: sell all at +40%", "x_trail10": "Test: tighter lock (10% trail)", "x_skip35": "Test: stricter rug skip (35%)", "x_noinsider": "Test: no insider rule", "x_insider1": "Test: skip if any insider wallet is in", "x_scalp20": "Test: quick scalp, sell all at +20%", "x_scalp30": "Test: quick scalp, sell all at +30%", "x_winscore": "Test: only buys high win scores", "x_aggro": "Smart aggressive", "x_swing": "Swing (holds for days)", "x_stop40": "Test: wider stop loss (-40%)", "x_stopwait": "Test: stop waits 3 minutes", "x_age60": "Test: buys from 60 minutes old", "x_best": "Best of: stop -40% and pool $15K+"}
+         "x_all40": "Test: sell all at +40%", "x_trail10": "Test: tighter lock (10% trail)", "x_skip35": "Test: stricter rug skip (35%)", "x_noinsider": "Test: no insider rule", "x_insider1": "Test: skip if any insider wallet is in", "x_scalp20": "Test: quick scalp, sell all at +20%", "x_scalp30": "Test: quick scalp, sell all at +30%", "x_winscore": "Test: only buys high win scores", "x_aggro": "Smart aggressive", "x_swing": "Swing (holds for days)", "x_stop40": "Test: wider stop loss (-40%)", "x_stopwait": "Test: stop waits 3 minutes", "x_age60": "Test: buys from 60 minutes old", "x_best": "Best of: stop -40% and pool $15K+", "x_strength": "Strength: buyers in control (from the Oct 7 study)"}
 
 
 def _closed(con, since_ms=None, strategy=None):

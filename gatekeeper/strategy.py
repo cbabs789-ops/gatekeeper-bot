@@ -251,6 +251,21 @@ class Strategy:
                 fails.append("%.0f%% off its high" % pull)
             if b < se * p["MOM_BUY_RATIO"]:
                 fails.append("buyers not dominant (%d/%d)" % (b, se))
+        elif p.get("ENTRY_MODE") == "strength":
+            # Buy strength, not dips. From the Oct 7 study of every recorded coin: at 2h and 4h old, real coins where
+            # buyers clearly outnumber sellers in a busy market were the only group that made money after costs.
+            bh, sh = s.get("buys_h1") or 0, s.get("sells_h1") or 0
+            sm5 = b / (b + se) if b + se else 0
+            sh1 = bh / (bh + sh) if bh + sh else 0
+            if sm5 < p["STR_BUY5"]:
+                fails.append("buyers only %.0f%% of trades in 5m" % (sm5 * 100))
+            if sh1 < p["STR_BUY1H"]:
+                fails.append("buyers only %.0f%% of trades over the hour" % (sh1 * 100))
+            # a market with almost no sellers is not strength: it is a coin people cannot sell
+            if sh1 > p["STR_BUY1H_MAX"] or sh < p["STR_MIN_SELLS_1H"]:
+                fails.append("almost nobody is selling (%d buys vs %d sells in 1h): looks unsellable" % (bh, sh))
+            if (s.get("fdv") or 0) > p["STR_MAX_FDV"] or s["liq"] > p["STR_MAX_LIQ"]:
+                fails.append("too big to be a real new coin")
         else:
             if runup < p["MIN_RUNUP_X"]:
                 fails.append("hasn't run (%.1fx)" % runup)
@@ -269,6 +284,10 @@ class Strategy:
             move = "breaking out: %+.0f%% in 5 min, %.0f%% off its high" % (mom, pull)
         elif p.get("ENTRY_MODE") == "survivor" and mom is not None:
             move = "survived %.1fh, climbing steadily: %+.0f%% over the last hour" % (age / 60, mom)
+        elif p.get("ENTRY_MODE") == "strength":
+            bh, sh = s.get("buys_h1") or 0, s.get("sells_h1") or 0
+            move = "buyers in control: %.0f%% of trades in 5m, %.0f%% over the hour" % (
+                (b / (b + se) * 100) if b + se else 0, (bh / (bh + sh) * 100) if bh + sh else 0)
         elif p.get("ENTRY_MODE") == "moonshot":
             move = "early moonshot signs: dev's first coin, has X, %.1fx since graduation" % runup
         else:

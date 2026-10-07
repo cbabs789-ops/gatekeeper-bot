@@ -484,7 +484,7 @@ const t=ms=>{const d=new Date(ms);return d.toLocaleString([], {month:"short",day
 const mcf=v=>{if(!v)return null;if(v>=1e9)return "$"+(+(v/1e9).toFixed(2))+"B MC";if(v>=1e6)return "$"+(+(v/1e6).toFixed(2))+"M MC";
  if(v>=1e3)return "$"+(+(v/1e3).toFixed(v>=1e5?0:1))+"K MC";return "$"+Math.round(v)+" MC"};
 const dur=ms=>{const m=Math.round(ms/60000);return m<60?m+"m":Math.floor(m/60)+"h "+(m%60)+"m"};
-const NAMES={main:"Main",wide:"Wide",follow:"Follow",momentum:"Momentum",survivor:"Survivor",x_all40:"Sell all +40%",x_trail10:"Tight trail",x_skip35:"Rug skip 35%",x_noinsider:"No insider rule",x_insider1:"Strict insider rule",x_scalp20:"Scalp +20%",x_scalp30:"Scalp +30%",x_winscore:"Win score",x_aggro:"Smart aggressive",x_swing:"Swing",x_stop40:"Stop -40%",x_stopwait:"Stop waits 3 min",x_age60:"From 60 min old",x_best:"Best of"};
+const NAMES={main:"Main",wide:"Wide",follow:"Follow",momentum:"Momentum",survivor:"Survivor",x_all40:"Sell all +40%",x_trail10:"Tight trail",x_skip35:"Rug skip 35%",x_noinsider:"No insider rule",x_insider1:"Strict insider rule",x_scalp20:"Scalp +20%",x_scalp30:"Scalp +30%",x_winscore:"Win score",x_aggro:"Smart aggressive",x_swing:"Swing",x_stop40:"Stop -40%",x_stopwait:"Stop waits 3 min",x_age60:"From 60 min old",x_best:"Best of",x_strength:"Strength"};
 function renderExp(X,s){if(!$("x-table"))return;const E=s.experiments||{rows:[]};
  const fmtS=a=>a&&a.trades?a.trades+" trades · "+a.win_rate+"% win · "+sgn(a.pnl):"no closed trades yet";
  $("x-table").replaceChildren(...(E.rows.length?E.rows.map(r=>{const d=el("div","item");const a=r.stats;const w=el("div");w.append(el("b",null,r.label));
@@ -556,7 +556,7 @@ function closedCard(c){const d=el("div","item");const w=el("div");w.append(link(
   d.append(tradeLog(c.log));
   d.classList.add("tap");d.onclick=e=>{if(e.target.closest("a"))return;toggleChart(d,c.id)};
   const cached=OPEN_CHARTS[c.id];if(cached&&cached!=="loading")d.append(priceChart(cached));return d}
-const SHADOW={};let XBOT="x_age60";
+const SHADOW={};let XBOT="x_strength";
 function render(s){
  s.strategies.forEach(x=>{if(x.shadow)SHADOW[x.name]=1});
  const X={strategies:s.strategies.filter(x=>x.shadow),open:s.open.filter(p=>SHADOW[p.strategy]),closed:s.closed.filter(c=>SHADOW[c.strategy])};
