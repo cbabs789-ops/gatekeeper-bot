@@ -176,6 +176,11 @@ SHADOW = {
                     "STR_MIN_AVG_TRADE": 20, "TAKE_PROFIT_PCT": 40, "STOP_LOSS_PCT": 30, "MAX_HOLD_MIN": 720, "MAX_OPEN": 8,
                     "LOCK_START_PCT": 0, "BREAKEVEN_AT_PCT": 0, "SELL_PRESSURE_EXIT": 0, "LIQ_DRAIN_PCT": 15,
                     "RISK_SIZING": 0, "ADAPTIVE_TARGETS": 0, "WIN_FILTER": 0},
+    # Runner: same coins as Main, bigger wins. Sells half at +30% (pays for the trade), lets the other half ride with a
+    # 25% trailing stop for up to 12 hours, and sells the rest at entry if it falls back. Recorded coins: half of the
+    # ones that reached +40% went on to 2x within 12h, and 17% to 3x. Main sells everything at +30%.
+    "x_runner": {"TAKE_PROFIT_PCT": 0, "TAKE_HALF_X": 1.3, "TRAIL_PCT": 25, "LOCK_START_PCT": 0, "BREAKEVEN_AT_PCT": 0,
+                 "ADAPTIVE_TARGETS": 0, "RUG_TP_PCT": 0, "MOONBAG_PCT": 0, "MAX_HOLD_MIN": 720},
     "x_skip35": {"RISK_SKIP": 35},            # stricter rug skip
     "x_scalp20": {"TAKE_PROFIT_PCT": 20},     # quick scalp: sell everything at +20% (about +13% after costs)
     "x_scalp30": {"TAKE_PROFIT_PCT": 30},     # quick scalp: sell everything at +30%
@@ -194,7 +199,7 @@ SHADOW = {
                 "BREAKEVEN_AT_PCT": 40, "MAX_HOLD_MIN": 10080, "ADAPTIVE_TARGETS": 0,
                 "SELL_PRESSURE_EXIT": 0},      # a 5-minute burst of selling is noise on a multi-day hold,
 }
-SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_strength,x_strength2,x_insider1,x_winscore").split(",") if x.strip() in SHADOW]
+SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_strength,x_strength2,x_runner,x_insider1,x_winscore").split(",") if x.strip() in SHADOW]
 ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main,wide,follow").split(",") if x.strip()]
 ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,follow").split(",") if x.strip() in PRESETS]
 
