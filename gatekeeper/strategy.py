@@ -266,6 +266,9 @@ class Strategy:
                 fails.append("almost nobody is selling (%d buys vs %d sells in 1h): looks unsellable" % (bh, sh))
             if (s.get("fdv") or 0) > p["STR_MAX_FDV"] or s["liq"] > p["STR_MAX_LIQ"]:
                 fails.append("too big to be a real new coin")
+            avg = (s.get("vol_h1") or 0) / (bh + sh) if bh + sh else 0
+            if p.get("STR_MIN_AVG_TRADE", 0) and avg < p["STR_MIN_AVG_TRADE"]:
+                fails.append("average trade only $%.0f over the hour: looks like bots faking volume" % avg)
         else:
             if runup < p["MIN_RUNUP_X"]:
                 fails.append("hasn't run (%.1fx)" % runup)
@@ -286,8 +289,9 @@ class Strategy:
             move = "survived %.1fh, climbing steadily: %+.0f%% over the last hour" % (age / 60, mom)
         elif p.get("ENTRY_MODE") == "strength":
             bh, sh = s.get("buys_h1") or 0, s.get("sells_h1") or 0
-            move = "buyers in control: %.0f%% of trades in 5m, %.0f%% over the hour" % (
-                (b / (b + se) * 100) if b + se else 0, (bh / (bh + sh) * 100) if bh + sh else 0)
+            move = "buyers in control: %.0f%% of trades in 5m, %.0f%% over the hour, average trade $%.0f" % (
+                (b / (b + se) * 100) if b + se else 0, (bh / (bh + sh) * 100) if bh + sh else 0,
+                (s.get("vol_h1") or 0) / (bh + sh) if bh + sh else 0)
         elif p.get("ENTRY_MODE") == "moonshot":
             move = "early moonshot signs: dev's first coin, has X, %.1fx since graduation" % runup
         else:

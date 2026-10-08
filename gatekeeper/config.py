@@ -109,6 +109,7 @@ STRATEGY_DEFAULTS = {
     "STR_MIN_SELLS_1H": 30,         # needs real selling too, or the price means nothing
     "STR_MAX_FDV": 50000000,        # bigger than this at a few hours old is a fake or a wrapped major
     "STR_MAX_LIQ": 1000000,
+    "STR_MIN_AVG_TRADE": 0,         # average $ per trade over the hour; bot farms fake buying with $1-$15 trades
     # --- moonshot entries (ENTRY_MODE "moonshot"): young coins with the two early signs /moonshots found ---
     "MOON_NEED_FIRST_DEV": 1,       # 1 = only coins that are the dev's first launch (4.2x more likely to go 10x)
     "MOON_NEED_X": 1,               # 1 = only coins with an X account (2.2x more likely to go 10x)
@@ -168,6 +169,13 @@ SHADOW = {
                    "TAKE_PROFIT_PCT": 40, "STOP_LOSS_PCT": 30, "MAX_HOLD_MIN": 720, "MAX_OPEN": 8,
                    "LOCK_START_PCT": 0, "BREAKEVEN_AT_PCT": 0, "SELL_PRESSURE_EXIT": 0, "LIQ_DRAIN_PCT": 0,
                    "RISK_SKIP": 100, "RISK_SIZING": 0, "ADAPTIVE_TARGETS": 0, "INSIDER_SKIP": 0, "WIN_FILTER": 0},
+    # Strength 2: the same entry, but it must look like real money (average trade $20+ over the hour; the four coins that
+    # vanished together on Oct 7 averaged $2-$13) and it keeps Main's rug protections: rug-risk skip, insider rule,
+    # top-10 limit and the liquidity-drain exit. The plain Strength bot keeps running as the comparison.
+    "x_strength2": {"ENTRY_MODE": "strength", "MIN_AGE_MIN": 120, "MAX_AGE_MIN": 300, "MIN_LIQ_USD": 15000, "MIN_M5_TXNS": 60,
+                    "STR_MIN_AVG_TRADE": 20, "TAKE_PROFIT_PCT": 40, "STOP_LOSS_PCT": 30, "MAX_HOLD_MIN": 720, "MAX_OPEN": 8,
+                    "LOCK_START_PCT": 0, "BREAKEVEN_AT_PCT": 0, "SELL_PRESSURE_EXIT": 0, "LIQ_DRAIN_PCT": 15,
+                    "RISK_SIZING": 0, "ADAPTIVE_TARGETS": 0, "WIN_FILTER": 0},
     "x_skip35": {"RISK_SKIP": 35},            # stricter rug skip
     "x_scalp20": {"TAKE_PROFIT_PCT": 20},     # quick scalp: sell everything at +20% (about +13% after costs)
     "x_scalp30": {"TAKE_PROFIT_PCT": 30},     # quick scalp: sell everything at +30%
@@ -186,7 +194,7 @@ SHADOW = {
                 "BREAKEVEN_AT_PCT": 40, "MAX_HOLD_MIN": 10080, "ADAPTIVE_TARGETS": 0,
                 "SELL_PRESSURE_EXIT": 0},      # a 5-minute burst of selling is noise on a multi-day hold,
 }
-SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_strength,x_age60,x_insider1,x_winscore").split(",") if x.strip() in SHADOW]
+SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_strength,x_strength2,x_insider1,x_winscore").split(",") if x.strip() in SHADOW]
 ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main,wide,follow").split(",") if x.strip()]
 ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,follow").split(",") if x.strip() in PRESETS]
 
