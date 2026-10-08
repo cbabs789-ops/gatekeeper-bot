@@ -28,6 +28,30 @@ TRUMP_FEED = "https://www.trumpstruth.org/feed"
 GNEWS = "https://news.google.com/rss/search?q={}&hl=en-US&gl=US&ceid=US:en"
 GNEWS_TOP = "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en"
 NEWS_QUERIES = ("memecoin", "meme coin solana", "crypto Trump", "pump.fun", "viral trend")
+# The wider news desk on the site: everything that can move the coins the bots trade. Refreshed every 15 minutes.
+# (section, why it matters, Google News searches, direct RSS feeds)
+NEWS_SECTIONS = [
+    ("Meme coins and Solana", "What the coins we trade are riding, and anything that changes how Solana or pump.fun work.",
+     ("memecoin", "meme coin solana", "pump.fun", "solana network", "Robinhood chain crypto", "dexscreener trending"), ()),
+    ("Crypto market", "When Bitcoin and the big coins fall, meme coins fall harder. A rough market day is a bad day to buy.",
+     ("bitcoin price today", "crypto market today", "ethereum price"),
+     ("https://cointelegraph.com/rss", "https://www.coindesk.com/arc/outboundfeeds/rss/", "https://decrypt.co/feed")),
+    ("Trump, Musk and politics", "One post from either can launch or kill a coin within minutes.",
+     ("Trump crypto", "Elon Musk crypto", "Trump executive order", "White House crypto"), ()),
+    ("Rules and regulators", "SEC, Congress and court decisions move the whole market, and can shut down platforms we rely on.",
+     ("SEC crypto", "crypto regulation", "stablecoin bill", "CFTC crypto"), ()),
+    ("Economy and rates", "Interest rates, inflation and the stock market decide whether people have money to gamble with.",
+     ("Federal Reserve interest rates", "CPI inflation report", "stock market today"), ()),
+    ("Hacks, rugs and scams", "Exploits and rug pulls scare buyers off and show which tricks scammers are using right now.",
+     ("crypto hack exploit", "rug pull crypto", "crypto scam"), ()),
+    ("Listings and exchanges", "A coin listed on Binance, Coinbase or Robinhood can jump; an exchange problem can freeze trading.",
+     ("Binance listing", "Coinbase listing", "Robinhood crypto listing"), ()),
+    ("AI and tech", "AI is the biggest meme coin theme; big AI news often spawns new coins within hours.",
+     ("AI agents crypto", "OpenAI", "Nvidia"), ()),
+    ("Viral and pop culture", "Viral moments, celebrities and memes are what new coins get named after.",
+     ("viral trend", "TikTok trend", "celebrity crypto"), ()),
+]
+NEWS_EVERY_MIN = 15
 DEX_PROFILES = "https://api.dexscreener.com/token-profiles/latest/v1"
 DEX_BOOSTS = "https://api.dexscreener.com/token-boosts/top/v1"
 DEX_TOKENS = "https://api.dexscreener.com/tokens/v1/{}/{}"
@@ -107,11 +131,42 @@ class Trends:
         self.r = runner
         self.state = {"updated": 0, "trump": [], "news": [], "hot": [], "profiles": [], "matches": [], "suggestions": [], "words": []}
         self.seen_trump = set()
+        self.sections, self.sections_ts = [], 0
         try:                       # kept across restarts so a pick isn't re-sent after every update
             from . import db as _db
             self.alerted = {k: int(v) for k, v in json.loads(_db.kv_get(runner.con, "trends_alerted") or "{}").items()}
         except Exception:  # noqa: BLE001
             self.alerted = {}
+
+    # ------------------------------------------------------------------ news desk
+    async def collect_sections(self):
+        """Every section's latest headlines, newest first, no repeats across sections."""
+        s = self.r.session
+        now = int(time.time() * 1000)
+        out, seen = [], set()
+        for name, why, queries, feeds in NEWS_SECTIONS:
+            items = []
+            for q in queries:
+                x = await _get(s, GNEWS.format(q.replace(" ", "+")))
+                items += parse_rss(x or "", None, 12)
+                await asyncio.sleep(1)
+            for url in feeds:
+                x = await _get(s, url)
+                items += parse_rss(x or "", url.split("/")[2].replace("www.", ""), 15)
+                await asyncio.sleep(1)
+            keep = []
+            for n in sorted(items, key=lambda n: -n["ts"]):
+                # Google adds " - Outlet" to titles, so the same story from two outlets looks different without this
+                k = re.sub(r"\W+", " ", n["title"].rsplit(" - ", 1)[0].lower()).strip()[:70]
+                if not n["title"] or k in seen or now - n["ts"] > 48 * 3600 * 1000:
+                    continue
+                seen.add(k)
+                keep.append({"title": n["title"], "link": n["link"], "source": n["source"], "ts": n["ts"]})
+                if len(keep) >= 12:
+                    break
+            out.append({"name": name, "why": why, "items": keep})
+        if any(sec["items"] for sec in out):     # a failed round keeps the last good one
+            self.sections, self.sections_ts = out, now
 
     # ------------------------------------------------------------------ collect
     async def collect(self):
@@ -265,13 +320,34 @@ class Trends:
         sugg.sort(key=lambda c: -c["score"])
         sugg = sugg[:6]
 
+        # tie each headline on the news desk to coins being traded right now whose name it mentions
+        coin_words = [(c["symbol"], c.get("words") or []) for c in match_cards]
+        sections = []
+        for sec in self.sections:
+            items = []
+            for n in sec["items"]:
+                t = n["title"].lower()
+                hit = [sym for sym, ws in coin_words if any(re.search(r"\b%s\b" % re.escape(w), t) for w in ws)][:3]
+                items.append(dict(n, coins=hit))
+            sections.append(dict(sec, items=items))
         self.state = {"updated": now, "trump": trump[:10], "news": news[:30], "hot": hot_cards[:12], "profiles": prof_cards[:18],
-                      "matches": match_cards[:10], "suggestions": sugg, "words": words[:20]}
+                      "matches": match_cards[:10], "suggestions": sugg, "words": words[:20],
+                      "sections": sections, "sections_updated": self.sections_ts}
         await self.alerts(trump, sugg, match_cards)
         # track suggested coins so the scorecard can grade the bot's own picks
         for c in sugg:
             self.r.track_coin(c["address"], c["chain"])
             self._record_pick(c, now)
+
+    def news_text(self, per=3):
+        """Plain summary for the stats feed: the newest few headlines in each section."""
+        if not self.sections:
+            return "News desk not loaded yet (first load a few minutes after the bot starts, then every %d minutes)." % NEWS_EVERY_MIN
+        L = []
+        for sec in self.sections:
+            L.append("%s:" % sec["name"])
+            L += ["  %s (%s)" % (n["title"][:140], n["source"] or "?") for n in sec["items"][:per]] or ["  nothing in the last 48h"]
+        return "\n".join(L)
 
     def _record_pick(self, c, now):
         fomo.ensure_schema(self.r.con)
@@ -315,6 +391,11 @@ class Trends:
         await asyncio.sleep(30)
         every = int(float(config.os.environ.get("GK_TRENDS_MIN", "2")))
         while True:
+            if time.time() * 1000 - self.sections_ts > NEWS_EVERY_MIN * MIN:
+                try:
+                    await self.collect_sections()
+                except Exception:  # noqa: BLE001
+                    log.exception("News desk update failed")
             try:
                 await self.collect()
             except Exception:  # noqa: BLE001

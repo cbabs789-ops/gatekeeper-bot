@@ -408,7 +408,7 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 .trow{display:grid;grid-template-columns:1.2fr 1fr 1.3fr .9fr;gap:6px;font-size:12.5px}.trow .wide{grid-column:1/-1;font-size:11.5px;margin-top:-2px}
 .legend{grid-column:1/-1;font-size:11px;color:var(--dim);display:flex;gap:10px;flex-wrap:wrap}
 .legend i{display:inline-block;width:12px;height:0;border-top:2px dashed;vertical-align:middle;margin-right:4px}
-.tabs{display:flex;gap:8px;margin:14px 0 4px}.tabs button{flex:1;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit;font-weight:600;cursor:pointer}
+.tabs{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0 4px}.tabs button{flex:1 1 auto;white-space:nowrap;background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px;font:inherit;font-weight:600;cursor:pointer}
 .tabs button.on{border-color:var(--acc);color:var(--acc)}
 #x-pick button{flex:1 1 30%;font-size:13px;padding:8px}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
@@ -429,7 +429,7 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 @keyframes pop{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 </style></head><body><div class="wrap">
 <header><h1>🤖 Gatekeeper Live</h1><span class="pill" id="health">connecting…</span></header>
-<nav class="tabs"><button id="tb-trading" class="on" onclick="tab('trading')">📈 Trading</button><button id="tb-trends" onclick="tab('trends')">📰 Trends</button><button id="tb-events" onclick="tab('events')">🗓️ Events</button><button id="tb-trench" onclick="tab('trench')">⛏️ Insiders</button><button id="tb-exp" onclick="tab('exp')">🧪 Experiments</button></nav>
+<nav class="tabs"><button id="tb-trading" class="on" onclick="tab('trading')">📈 Trading</button><button id="tb-trends" onclick="tab('trends')">📰 News</button><button id="tb-events" onclick="tab('events')">🗓️ Events</button><button id="tb-trench" onclick="tab('trench')">⛏️ Insiders</button><button id="tb-exp" onclick="tab('exp')">🧪 Experiments</button></nav>
 <div id="tab-exp" hidden>
 <p class="dim">Copies of Main with one rule changed, trading silently on paper. Each one can buy coins Main skips, or skip coins Main buys. No alerts, and they never count toward Main's results. Do not judge one on fewer than about 30 trades.</p>
 <h2>Each test bot against Main, over the same days</h2><div class="list" id="x-table"></div>
@@ -451,11 +451,11 @@ footer{margin:30px 0 10px;font-size:12px;color:var(--dim)}
 </div>
 <div id="tab-trends" hidden>
 <p class="dim" id="tr-upd">Loading trends…</p>
+<h2>News desk <span class="dim" style="text-transform:none;letter-spacing:0" id="nd-upd"></span></h2><div class="chips" id="nd-chips" style="margin-bottom:8px"></div><p class="dim" id="nd-why" style="margin:0 0 6px"></p><div class="list" id="tr-news"></div>
 <h2>Worth a look <span class="dim" style="text-transform:none;letter-spacing:0">(the bot's picks, not buy signals)</span></h2><div class="cards" id="tr-sugg"></div>
 <h2>Trump's latest posts</h2><div class="list" id="tr-trump"></div>
 <h2>Coins riding the news</h2><div class="cards" id="tr-match"></div>
 <h2>Hot on Fomo (last 3h)</h2><div class="cards" id="tr-hot"></div>
-<h2>Headlines</h2><div class="list" id="tr-news"></div>
 <h2>How the bot's picks did</h2><div class="list" id="tr-record"></div>
 </div>
 <div id="tab-trading">
@@ -623,10 +623,21 @@ function renderTrends(s){if(!s.updated){$("tr-upd").textContent="Trends are stil
  $("tr-match").replaceChildren(...(s.matches.length?s.matches.map(c=>{const w=el("div","why");w.append(document.createTextNode("Matches: "+c.words.join(", ")));(c.headlines||[]).forEach(h=>{const x=el("div","dim");x.style.fontSize="12px";x.append(link(h.title,h.link));w.append(x)});return coinCard(c,w)}):empty("No coins matching today's news yet.")));
  $("tr-hot").replaceChildren(...(s.hot.length?s.hot.map(c=>{const w=el("div","why");w.textContent=(c.your_traders&&c.your_traders.length?"Your traders: "+c.your_traders.map(t=>"@"+t).join(", ")+" · ":"")+"net "+km2(Math.abs(c.net))+(c.net<0?" selling":" buying");return coinCard(c,w)}):empty("Quiet on Fomo.")));
  if($("tr-words"))$("tr-words").replaceChildren(...(s.words.length?s.words.map(w=>el("span",null,w)):empty("…")));
- $("tr-news").replaceChildren(...(s.news.length?s.news.slice(0,10).map(n=>{const d=el("div","item");const w=el("div");w.append(link(n.title,n.link));d.append(w,el("span","dim",ago(n.ts)));d.append(el("div","sub",(n.source||"")+" · "+n.topic));return d}):empty("No headlines.")));
+ NEWS=s;renderNews();
  if($("tr-prof"))$("tr-prof").replaceChildren(...(s.profiles.length?s.profiles.map(c=>coinCard(c)):empty("No new profiles.")));
  const rec=(s.picks_record||[]);
  $("tr-record").replaceChildren(...(rec.length?rec.map(r=>{const d=el("div","item");d.append(el("b",null,"$"+r.symbol),el("span","dim","1h "+pc(r.p0,r.p1h)+" · 6h "+pc(r.p0,r.p6h)+" · 24h "+pc(r.p0,r.p24h)));return d}):empty("No picks graded yet. Each pick is checked 1h, 6h and 24h later.")))}
+let NEWS=null,NSEC="All";
+function renderNews(){const s=NEWS;if(!s)return;const empty=t=>[el("div","empty",t)];
+ const secs=(s.sections||[]);
+ if(!secs.length){$("nd-chips").replaceChildren();$("nd-why").textContent="";$("nd-upd").textContent="(loading, first fill takes a few minutes)";
+  $("tr-news").replaceChildren(...(s.news.length?s.news.slice(0,10).map(n=>{const d=el("div","item");const w=el("div");w.append(link(n.title,n.link));d.append(w,el("span","dim",ago(n.ts)));d.append(el("div","sub",(n.source||"")+" · "+n.topic));return d}):empty("No headlines.")));return}
+ $("nd-upd").textContent="· updated "+ago(s.sections_updated)+" · every 15 min";
+ if(NSEC!=="All"&&!secs.some(x=>x.name===NSEC))NSEC="All";
+ $("nd-chips").replaceChildren(...["All"].concat(secs.map(x=>x.name)).map(n=>{const c=el("button","chip"+(n===NSEC?" good":""),n==="All"?"All":n+" ("+secs.find(x=>x.name===n).items.length+")");c.style.cursor="pointer";c.style.background="none";c.onclick=()=>{NSEC=n;renderNews()};return c}));
+ let items;if(NSEC==="All"){items=[];secs.forEach(x=>x.items.forEach(n=>items.push(Object.assign({sec:x.name},n))));items.sort((a,b)=>b.ts-a.ts);items=items.slice(0,30);$("nd-why").textContent="Newest across every section. Pick a section to see why it matters."}
+ else{const x=secs.find(x=>x.name===NSEC);items=x.items.map(n=>Object.assign({sec:x.name},n));$("nd-why").textContent="Why it matters: "+x.why}
+ $("tr-news").replaceChildren(...(items.length?items.map(n=>{const d=el("div","item");const w=el("div");w.append(link(n.title,n.link));d.append(w,el("span","dim",ago(n.ts)));d.append(el("div","sub",(n.source||"")+(NSEC==="All"?" · "+n.sec:"")+((n.coins||[]).length?" · coins riding it: "+n.coins.map(c=>"$"+c).join(", "):"")));return d}):empty("Nothing in this section in the last 48 hours.")))}
 setInterval(()=>{if(TAB==="trends"||TAB==="events")loadTrends()},20000);
 try{const t=localStorage.getItem("gk_tab");if(["trends","trench","events","exp"].includes(t))tab(t)}catch(_){ }
 function toast(e){if(SHADOW[e.strategy]||(e.strategy||"").startsWith("x_"))return;const t=el("div","toast "+e.type);const n=NAMES[e.strategy]||e.strategy;
