@@ -133,7 +133,21 @@ def export_csv(con):
             other += "## %s\n%s\n" % (table, dump("SELECT * FROM %s" % table))
         except Exception:  # noqa: BLE001
             pass
-    return {"data/trades.csv": trades, "data/coins.csv": coins, "data/other_bots.txt": other}
+    # a sample of the raw Fomo feed (public trades), to check what each field means before the playbook relies on it
+    fomo_rows = ""
+    try:
+        recent = con.execute("SELECT ts, trader, side, token, token_address, chain, usd, raw FROM fomo_events ORDER BY ts DESC LIMIT 300").fetchall()
+        texts = [r for r in con.execute("SELECT ts, trader, side, token, token_address, chain, usd, raw FROM fomo_events "
+                                        "WHERE raw GLOB '*\"text\": \"[^\"]*' ORDER BY ts DESC LIMIT 100")]
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["ts", "trader", "side", "token", "token_address", "chain", "usd", "raw"])
+        for r in list(recent) + texts:
+            w.writerow([r["ts"], r["trader"], r["side"], r["token"], r["token_address"], r["chain"], r["usd"], (r["raw"] or "")[:1500]])
+        fomo_rows = buf.getvalue()
+    except Exception as e:  # noqa: BLE001
+        fomo_rows = "error: %s\n" % e
+    return {"data/trades.csv": trades, "data/coins.csv": coins, "data/other_bots.txt": other, "data/fomo_sample.csv": fomo_rows}
 
 
 async def publish(r, full=False):
