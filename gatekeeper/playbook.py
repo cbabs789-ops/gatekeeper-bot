@@ -5,7 +5,8 @@ how much they put in, how fast they sold, in how many pieces, how much cash came
 the traders who look best keep being best later (skill) or not (luck).
 
 A "position" is one trader in one coin: their buys, then their sells. What it was worth:
-  sold some or all  -> the cash they took out (anything left unsold counts as zero)
+  sold some or all  -> the stake plus the profit or loss locked in (the feed's dollar amount on a sell is the
+                       realized profit, not the proceeds; anything left unsold counts at cost)
   never sold        -> what the buy was worth 24h later (so a rug they could not sell counts as a loss)
 Only positions that have been quiet for 24h are counted, and only on chains the bot can price.
 """
@@ -58,12 +59,13 @@ def _positions(con, since, now):
                 # a sell with no buy on record: bought before we were recording, so its result can't be known
                 p = cur[k] = {"trader": trader, "addr": addr, "sym": r["token"] or "", "t0": r["ts"], "last": r["ts"], "in": 0.0,
                               "out": 0.0, "n_buy": 0, "n_sell": 0, "s0": None, "s1": None, "pre": True, "bad": False}
+            # the feed reports a sell's dollar amount as the profit or loss it locked in, not the sale proceeds
             p["out"] += usd
             p["n_sell"] += 1
             if p["s0"] is None:
                 p["s0"] = r["ts"]
             p["s1"] = r["ts"]
-        if usd <= 0:
+        if r["side"] == "buy" and usd <= 0:
             p["bad"] = True          # the feed's dollar amount was missing or impossible
         p["last"] = r["ts"]
     done += list(cur.values())
@@ -97,7 +99,7 @@ def _finish(p, calls, ages, now):
     p["liq0"] = c["liq0"] if c is not None and c["p0"] and c["p0"] > 0 else None
     p["x1"], p["x6"], p["x24"] = (_ratio(c["p0"], c[k]) for k in ("p1h", "p6h", "p24h")) if c is not None else (None, None, None)
     if p["n_sell"]:
-        p["value"] = p["out"]
+        p["value"] = max(0.0, p["in"] + p["out"])      # stake plus the profit or loss locked in (anything unsold counted at cost)
     elif p["x24"] is not None:
         p["value"] = p["in"] * p["x24"]
     else:
@@ -154,7 +156,7 @@ def _habits(pos):
             "age": _med([p["age"] for p in pos]), "age_n": sum(1 for p in pos if p["age"] is not None),
             "liq": _med([p["liq0"] for p in pos]), "liq_n": sum(1 for p in pos if p["liq0"]),
             # same positions, three ways: what they cashed out vs holding their buy for 6h or 24h
-            "exit": {"n": len(both), "got": round(sum(min(p["out"], p["in"] * CAP_X) for p in both) / i, 3),
+            "exit": {"n": len(both), "got": round(sum(min(p["value"], p["in"] * CAP_X) for p in both) / i, 3),
                      "hold6": round(sum(p["in"] * min(p["x6"], CAP_X) for p in both) / i, 3),
                      "hold24": round(sum(p["in"] * min(p["x24"], CAP_X) for p in both) / i, 3)} if len(both) >= 20 and i else None}
 
@@ -251,8 +253,8 @@ def report(con):
     if not r.get("n"):
         return "\n".join(L + ["No finished positions yet (%s seen). A position counts once it has been quiet for 24 hours." % format(r.get("seen", 0), ",")])
     a = r["all"]
-    L.append("From %s finished positions by %s traders (buys and sells, last %d days). A sold position is worth the cash taken out; "
-             "a coin never sold is worth its price 24h after the buy." % (format(r["n"], ","), format(r["traders"], ","), r["days"]))
+    L.append("From %s finished positions by %s traders (buys and sells, last %d days). A sold position is worth the stake plus the profit or loss "
+             "locked in when selling (anything unsold counts at cost); a coin never sold is worth its price 24h after the buy." % (format(r["n"], ","), format(r["traders"], ","), r["days"]))
     L.append("\n<b>Everyone</b>: %s back per $1 put in · %.0f%% of positions made money" % (_x(a["x"]), a["win"]))
     c = r.get("check") or {}
     L.append("\n<b>Are the top traders skilled or lucky?</b>")
@@ -289,7 +291,7 @@ def report(con):
         for label, h in (("Best fifth", th), ("Everyone else", rh)):
             e = h.get("exit")
             if e:
-                L.append("%s, same %s positions: cashed out %s per $1 · holding 6h would be %s · holding 24h %s" % (
+                L.append("%s, same %s positions: their sells came to %s per $1 · holding 6h would be %s · holding 24h %s" % (
                     label, format(e["n"], ","), _x(e["got"]), _x(e["hold6"]), _x(e["hold24"])))
         if r.get("names"):
             L.append("Best fifth, top names: " + ", ".join("@%s (%d, %s)" % (n["t"], n["n"], _x(n["x"])) for n in r["names"]))
