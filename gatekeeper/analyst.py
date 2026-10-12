@@ -437,16 +437,19 @@ class Analyst:
             try:
                 if self.key:
                     await self.manage(now)
-                    if n % 15 == 0:            # every 15 min: look over the established coins that are climbing
-                        from .hold import trend_fails
+                    if n % 15 == 0:            # every 15 min: judge up to 3 established coins from the Hold bot's watchlist
+                        # Oct 12: every watchlist coin, not only the ones already climbing. A person can buy a dip in an
+                        # intact uptrend; the Hold bot's fixed rule can't. Each coin is looked at again after 6 hours.
                         watch = getattr(getattr(self.r, "hold", None), "watch", {}) or {}
                         looked = 0
-                        for c in sorted(watch.values(), key=lambda c: -c["pc24h"]):
-                            if looked >= 2:
+                        for c in sorted(watch.values(), key=lambda c: -c["vol24"]):
+                            if looked >= 3:
                                 break
-                            if trend_fails(c):
-                                continue
-                            res = await self.consider(c["mint"], "solana", "hold")
+                            note = ("ESTABLISHED COIN: %.0f days old, market cap %s, %d buyers vs %d sellers in 24h. Judge it as a swing "
+                                    "trade held for days, not a quick flip: these coins move 15-30%% in a normal day, so use a stop of "
+                                    "25-35%% and a horizon of 48-168 hours. A pullback inside an intact uptrend, with the pool holding "
+                                    "and buyers ahead of sellers, can be a buy." % (c["age_days"], km(c["fdv"]), c["buyers24"], c["sellers24"]))
+                            res = await self.consider(c["mint"], "solana", "hold", extra=note)
                             looked += 0 if res in ("Reviewed recently.", "The AI trader already holds that coin.") else 1
             except Exception:  # noqa: BLE001
                 log.exception("AI trader update failed")

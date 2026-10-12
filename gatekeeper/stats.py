@@ -128,6 +128,12 @@ def export_csv(con):
                   "FROM trades WHERE mode='live' AND closed_at IS NOT NULL ORDER BY closed_at")
     coins = dump("SELECT * FROM coin_features WHERE t_min IN (120, 240) AND liq>=10000 AND ts>? ORDER BY ts",
                  (int(time.time() * 1000) - 30 * 86400000,))
+    # the Hold bot's watchlist readings, one per coin per hour: the history the slow lane's rules can be tested on
+    try:
+        hold_hist = dump("SELECT * FROM hold_snaps WHERE ts>? AND rowid IN (SELECT MIN(rowid) FROM hold_snaps GROUP BY mint, ts/3600000) ORDER BY ts",
+                         (int(time.time() * 1000) - 30 * 86400000,))
+    except Exception as e:  # noqa: BLE001
+        hold_hist = "error: %s\n" % e
     other = ""
     for table in ("hold_trades", "ai_trades", "ai_reviews"):
         try:
@@ -148,7 +154,7 @@ def export_csv(con):
         fomo_rows = buf.getvalue()
     except Exception as e:  # noqa: BLE001
         fomo_rows = "error: %s\n" % e
-    return {"data/trades.csv": trades, "data/coins.csv": coins, "data/other_bots.txt": other, "data/fomo_sample.csv": fomo_rows}
+    return {"data/trades.csv": trades, "data/coins.csv": coins, "data/other_bots.txt": other, "data/fomo_sample.csv": fomo_rows, "data/hold_history.csv": hold_hist}
 
 
 async def publish(r, full=False):

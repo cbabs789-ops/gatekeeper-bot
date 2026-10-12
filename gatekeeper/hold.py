@@ -29,14 +29,17 @@ def _env(name, default):
     return float(os.environ.get("GK_HOLD_" + name, default))
 
 
+# Oct 12: the slow lane became the main focus. Wider watchlist ($5M to $500M, 3+ days old), and room to breathe:
+# these coins move 15-30% in a normal day, so the old -20% stop sold $TROLL and $baton at the bottom ($baton then
+# rose 95% the next day). Stop -35%, trail 30% once up 30%, hold up to 14 days, up to 5 at a time.
 P = {
-    "BET": _env("BET", 300), "MAX_OPEN": int(_env("MAX_OPEN", 3)),
-    "MIN_CAP": _env("MIN_CAP", 10e6), "MAX_CAP": _env("MAX_CAP", 150e6),     # above this it's a major, not a meme play
-    "MIN_LIQ": _env("MIN_LIQ", 300000), "MIN_AGE_DAYS": _env("MIN_AGE_DAYS", 5), "MIN_BUYERS": _env("MIN_BUYERS", 300),
+    "BET": _env("BET", 300), "MAX_OPEN": int(_env("MAX_OPEN", 5)),
+    "MIN_CAP": _env("MIN_CAP", 5e6), "MAX_CAP": _env("MAX_CAP", 500e6),      # above this it's a major, not a meme play
+    "MIN_LIQ": _env("MIN_LIQ", 200000), "MIN_AGE_DAYS": _env("MIN_AGE_DAYS", 3), "MIN_BUYERS": _env("MIN_BUYERS", 200),
     "MAX_TOP10": _env("MAX_TOP10", 30),
     "UP24_MIN": _env("UP24_MIN", 3), "UP24_MAX": _env("UP24_MAX", 50),       # rising, but not a one-day spike
-    "STOP": _env("STOP", 20), "TRAIL_START": _env("TRAIL_START", 25), "TRAIL": _env("TRAIL", 25),
-    "MAX_DAYS": _env("MAX_DAYS", 7), "COOLDOWN_DAYS": _env("COOLDOWN_DAYS", 3),
+    "STOP": _env("STOP", 35), "TRAIL_START": _env("TRAIL_START", 30), "TRAIL": _env("TRAIL", 30),
+    "MAX_DAYS": _env("MAX_DAYS", 14), "COOLDOWN_DAYS": _env("COOLDOWN_DAYS", 3),
     "COST": _env("COST", 1.5),                                                # % per side: fee plus slippage on a deep pool
 }
 SKIP = {"SOL", "WSOL", "USDC", "USDT", "USDG", "USDS", "PYUSD", "JUP", "JTO", "RAY", "ORCA", "JITOSOL", "MSOL", "BSOL",
@@ -138,7 +141,7 @@ class Hold:
     async def fetch(self):
         now = int(time.time() * 1000)
         coins = {}
-        for kind, pages in (("trending_pools", 3), ("pools", 5)):
+        for kind, pages in (("trending_pools", 3), ("pools", 8)):
             for page in range(1, pages + 1):
                 url = GECKO % (kind, page) + ("&sort=h24_volume_usd_desc" if kind == "pools" else "")
                 try:
