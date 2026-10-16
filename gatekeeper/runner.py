@@ -12,7 +12,7 @@ import aiohttp
 import html
 import re
 
-from . import analyst, bounce, check, config, db, events, fomo, followtest, hold, notify, playbook, report, research, risk, stats, sweep, trench, trends, web, winmodel
+from . import analyst, bounce, check, config, db, events, fomo, followtest, guard, hold, holdtest, notify, playbook, report, research, risk, stats, sweep, trench, trends, web, winmodel
 from .sources import CHAINS, EVM_RE, SOL_RE, DexFailed, dexscreener_batch, pair_to_snapshot, pumpportal_stream, safety_check
 from .strategy import MIN, PaperBroker, Position, Strategy
 
@@ -70,6 +70,7 @@ class Runner:
         self.events = events.Events(self)
         self.hold = hold.Hold(self)
         self.analyst = analyst.Analyst(self)
+        self.guard = guard.Guard(self)
         self._load_routes()
         risk.ensure(self.con)
         self.rug_model = risk.load(self.con)
@@ -695,6 +696,26 @@ class Runner:
             self.sweeping = False
             db.kv_set(self.con, "busy_until", 0)
 
+    async def run_holdtest(self):
+        if self.sweeping:
+            await notify.send(self.session, "A test is already running. Results will show up here when it's done.")
+            return
+        self.sweeping = True
+        db.kv_set(self.con, "busy_until", now_ms() + 2 * 3600 * 1000)
+        await notify.send(self.session, "💎 Hold test: downloading months of price history for established coins, then replaying %d versions "
+                                        "of the slow-lane rules. About 10 minutes the first time." % len(holdtest.VARIANTS))
+        try:
+            pools = await holdtest.gather(self, progress=lambda t: notify.send(self.session, t))
+            res = await asyncio.to_thread(lambda: holdtest.run(db.connect(), pools))
+            holdtest.save(self.con, res)
+            await notify.send(self.session, holdtest.text(res))
+        except Exception as e:  # noqa: BLE001
+            log.exception("Hold test failed")
+            await notify.send(self.session, "Hold test failed: %s" % html.escape(str(e)[:300]))
+        finally:
+            self.sweeping = False
+            db.kv_set(self.con, "busy_until", 0)
+
     async def risk_backfill(self):
         """Once: rebuild rug-risk history from coins already recorded, so scores are learned from day one."""
         if db.kv_get(self.con, "rug_backfill_done"):
@@ -854,6 +875,17 @@ class Runner:
                         async def _pick(arg=text.split(None, 1)[1] if len(text.split(None, 1)) > 1 else ""):
                             await notify.send(self.session, await self.analyst.pick(arg))
                         asyncio.create_task(_pick())
+                    elif cmd in ("/own", "own", "/owned", "/mine", "/target", "/targets", "/unown"):
+                        async def _guard(c=cmd, arg=text.split(None, 1)[1] if len(text.split(None, 1)) > 1 else ""):
+                            fn = {"/target": self.guard.target, "/targets": self.guard.target, "/unown": self.guard.unown}.get(c, self.guard.own)
+                            try:
+                                await notify.send(self.session, await fn(arg))
+                            except Exception as e:  # noqa: BLE001
+                                log.exception("Guard command failed")
+                                await notify.send(self.session, "🛡️ That didn't work: %s" % html.escape(str(e)[:200]))
+                        asyncio.create_task(_guard())
+                    elif cmd in ("/holdtest", "holdtest"):
+                        asyncio.create_task(self.run_holdtest())
                     elif cmd in ("/hold", "hold", "/holdbot"):
                         await notify.send(self.session, self.hold.text())
                     elif cmd in ("/events", "events", "/speeches"):
@@ -892,7 +924,7 @@ class Runner:
                             days = 7
                         asyncio.create_task(self.run_sweep(days))
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the website's since-last-reset P/L count for a strategy (history is kept; Telegram reports are not affected)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/check COIN: the bot's verdict on any coin (paste its contract address, a Fomo or DexScreener link, or $TICKER)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/events: upcoming speeches, summits and signings, and the coins that could move\n/experiments: each test copy of Main against Main over the same days\n/winscore: what the win-score model has learned (chance of +40% before -30%)\n/ai: the AI trader: judges coins like a person, with its reasons and results\n/pick COIN: have the AI trader judge one of your own ideas (it buys on paper if it agrees)\n/hold: the Hold bot: $300 paper bets on established coins, held for days\n/playbook: how the Fomo traders who make money trade (hold times, exits, skill or luck)\n/bounce: can the bot tell a shake-out from a real dump when the stop loss hits\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early\n/publish: push a stats snapshot to GitHub now\n/setup: (send inside a Telegram group with Topics on) sort alerts into topics\n/unsetup: move alerts back to this private chat")
+                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the website's since-last-reset P/L count for a strategy (history is kept; Telegram reports are not affected)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/check COIN: the bot's verdict on any coin (paste its contract address, a Fomo or DexScreener link, or $TICKER)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/events: upcoming speeches, summits and signings, and the coins that could move\n/experiments: each test copy of Main against Main over the same days\n/winscore: what the win-score model has learned (chance of +40% before -30%)\n/ai: the AI trader: judges coins like a person, with its reasons and results\n/pick COIN: have the AI trader judge one of your own ideas (it buys on paper if it agrees)\n/own COIN AMOUNT CAP: watch a coin you really hold (e.g. /own SI 1800 29M); /own alone shows them\n/target COIN 50M 100M: alert when it reaches these caps\n/unown COIN: stop watching it\n/holdtest: replay the Hold bot's rules on months of price history (about 10 min)\n/hold: the Hold bot: $300 paper bets on established coins, held for days\n/playbook: how the Fomo traders who make money trade (hold times, exits, skill or luck)\n/bounce: can the bot tell a shake-out from a real dump when the stop loss hits\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early\n/publish: push a stats snapshot to GitHub now\n/setup: (send inside a Telegram group with Topics on) sort alerts into topics\n/unsetup: move alerts back to this private chat")
                     elif cmd.startswith("/"):
                         await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
                 notify.REPLY.set(None)
@@ -952,7 +984,7 @@ class Runner:
             await asyncio.gather(
                 fomo.Feed(self.con, self.on_fomo_alert, self.track_coin, self.on_trader_sell).run(),
                 pumpportal_stream(self.on_event, config.PUMPPORTAL_API_KEY),
-                self.poll_loop(), self.fast_loop(), self.safety_loop(), self.risk_backfill(), self.trends.loop(), self.events.loop(), self.hold.loop(), self.analyst.loop(), self.trench.loop(), stats.loop(self), self.telegram_loop(), self.daily_loop(), self.scorecard_loop())
+                self.poll_loop(), self.fast_loop(), self.safety_loop(), self.risk_backfill(), self.trends.loop(), self.events.loop(), self.hold.loop(), self.analyst.loop(), self.guard.loop(), self.trench.loop(), stats.loop(self), self.telegram_loop(), self.daily_loop(), self.scorecard_loop())
 
 
 def main():

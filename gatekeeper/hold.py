@@ -88,7 +88,7 @@ def parse(data, now):
         except ValueError:
             created = now
         pc, tx = a.get("price_change_percentage") or {}, (a.get("transactions") or {}).get("h24") or {}
-        c = {"mint": mint, "symbol": sym, "name": b.get("name") or "", "price": _f(a.get("base_token_price_usd")),
+        c = {"mint": mint, "symbol": sym, "name": b.get("name") or "", "pool": a.get("address"), "price": _f(a.get("base_token_price_usd")),
              "fdv": _f(a.get("market_cap_usd")) or _f(a.get("fdv_usd")), "liq": _f(a.get("reserve_in_usd")),
              "age_days": (now - created) / DAY, "pc1h": _f(pc.get("h1")), "pc6h": _f(pc.get("h6")), "pc24h": _f(pc.get("h24")),
              "buys24": int(tx.get("buys") or 0), "sells24": int(tx.get("sells") or 0),
