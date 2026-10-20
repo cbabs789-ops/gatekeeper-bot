@@ -120,6 +120,14 @@ PRESETS = {
     # the strict rules; sends Telegram alerts
     "main": {"TAKE_HALF_X": 1.4, "TAKE_PROFIT_PCT": 30, "RISK_SKIP": 35},   # Oct 4: skip rug risk 35%+ (best total in three tests running)
     #   # Oct 2: sell ALL at +30% (7-day test: 65% wins, +$471, vs 54% and +$448 for half at +40%)
+    # Version 2 (Oct 20): the meme sandbox. Strength 2's entry (buyers in control of a busy, two-sided market, average
+    # trade $20+) with Main's rug protections. Its own trades are the "no veto" record; every buy also goes to the AI
+    # trader, which only takes the trade if it agrees. Comparing the two answers one question: does the AI's veto help?
+    "sandbox": {"ENTRY_MODE": "strength", "MIN_AGE_MIN": 120, "MAX_AGE_MIN": 300, "MIN_LIQ_USD": 20000, "MIN_M5_TXNS": 60,
+                "STR_MIN_AVG_TRADE": 20, "MAX_TOP10_PCT": 20, "RISK_SKIP": 35, "INSIDER_SKIP": 2,
+                "TAKE_PROFIT_PCT": 40, "STOP_LOSS_PCT": 30, "MAX_HOLD_MIN": 720, "MAX_OPEN": 8,
+                "LOCK_START_PCT": 0, "BREAKEVEN_AT_PCT": 0, "SELL_PRESSURE_EXIT": 0, "LIQ_DRAIN_PCT": 15,
+                "RISK_SIZING": 0, "ADAPTIVE_TARGETS": 0, "WIN_FILTER": 0, "POSITION_USD": 100},
     # looser rules on the same coins; trades silently so it reaches 100 trades faster
     "wide": {
         "MIN_AGE_MIN": 10, "MIN_RUNUP_X": 1.3, "PULLBACK_MIN_PCT": 10, "PULLBACK_MAX_PCT": 45,
@@ -199,9 +207,9 @@ SHADOW = {
                 "BREAKEVEN_AT_PCT": 40, "MAX_HOLD_MIN": 10080, "ADAPTIVE_TARGETS": 0,
                 "SELL_PRESSURE_EXIT": 0},      # a 5-minute burst of selling is noise on a multi-day hold,
 }
-SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "x_strength2,x_runner").split(",") if x.strip() in SHADOW]
+SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "").split(",") if x.strip() in SHADOW]
 ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main,wide,follow").split(",") if x.strip()]
-ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "main,follow").split(",") if x.strip() in PRESETS]
+ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "sandbox").split(",") if x.strip() in PRESETS]
 
 
 def _num(default, raw):

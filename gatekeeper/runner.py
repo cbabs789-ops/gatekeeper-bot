@@ -12,7 +12,7 @@ import aiohttp
 import html
 import re
 
-from . import analyst, bounce, check, config, db, events, fomo, followtest, guard, hold, holdtest, notify, playbook, report, research, risk, stats, sweep, trench, trends, web, winmodel
+from . import analyst, bounce, check, config, core, db, events, fomo, followtest, guard, hold, holdtest, notify, playbook, report, research, risk, stats, sweep, trench, trends, web, winmodel
 from .sources import CHAINS, EVM_RE, SOL_RE, DexFailed, dexscreener_batch, pair_to_snapshot, pumpportal_stream, safety_check
 from .strategy import MIN, PaperBroker, Position, Strategy
 
@@ -45,9 +45,25 @@ def today_local():
     return datetime.now(TZ).strftime("%Y-%m-%d %H")   # hourly buckets for launch counts
 
 
+def archive_v1(con):
+    """Version 2 (Oct 20): the old bots are retired. Their records are kept, not deleted: paper trades are marked
+    'archive' (every report only reads 'live' ones) and the Hold bot's and AI trader's tables are renamed with
+    _archive_v1. Runs once. To look at the old numbers: SELECT ... FROM trades WHERE mode='archive'."""
+    if db.kv_get(con, "v2_archived"):
+        return
+    con.execute("UPDATE trades SET mode='archive' WHERE mode='live'")
+    have = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    for t in ("hold_trades", "ai_trades", "ai_reviews"):
+        if t in have and t + "_archive_v1" not in have:
+            con.execute("DROP INDEX IF EXISTS ai_reviews_mint") if t == "ai_reviews" else None
+            con.execute("ALTER TABLE %s RENAME TO %s_archive_v1" % (t, t))
+    db.kv_set(con, "v2_archived", int(time.time() * 1000))
+
+
 class Runner:
     def __init__(self):
         self.con = db.connect()
+        archive_v1(self.con)
         self.safety = {r["mint"]: dict(r) for r in self.con.execute("SELECT * FROM safety")}
         look = lambda m: self.safety.get(m)  # noqa: E731
         self.strats = {name: Strategy(config.strategy_params(preset=name), look) for name in config.ENABLED_PRESETS + config.SHADOW_PRESETS}
@@ -71,6 +87,7 @@ class Runner:
         self.hold = hold.Hold(self)
         self.analyst = analyst.Analyst(self)
         self.guard = guard.Guard(self)
+        self.core = core.Core(self)
         self._load_routes()
         risk.ensure(self.con)
         self.rug_model = risk.load(self.con)
@@ -482,8 +499,8 @@ class Runner:
                 "VALUES('live',?,?,?,?,?,?,?,?,?)",
                 (name, pos.mint, pos.symbol, pos.opened_at, pos.entry_price, pos.size_usd, pos.qty_total, pos.why, json.dumps(pos.legs)))
             pos.trade_id = cur.lastrowid
-            if name == "main":                 # the AI trader gives its own verdict on everything Main buys
-                asyncio.create_task(self.analyst.on_main_buy(pos))
+            if name in ("main", "sandbox"):     # the AI trader gives its own verdict on everything these buy
+                asyncio.create_task(self.analyst.on_main_buy(pos, source=name))
             if alert:
                 self._bg(notify.send(self.session, tag + notify.fmt_buy(pos, a["spot"], a["liq"], self.strats[name].p, self.supply(pos.mint))))
         elif a["type"] == "partial":
@@ -884,6 +901,8 @@ class Runner:
                                 log.exception("Guard command failed")
                                 await notify.send(self.session, "🛡️ That didn't work: %s" % html.escape(str(e)[:200]))
                         asyncio.create_task(_guard())
+                    elif cmd in ("/core", "core", "/v2"):
+                        await notify.send(self.session, self.core.text())
                     elif cmd in ("/holdtest", "holdtest"):
                         asyncio.create_task(self.run_holdtest())
                     elif cmd in ("/hold", "hold", "/holdbot"):
@@ -924,7 +943,7 @@ class Runner:
                             days = 7
                         asyncio.create_task(self.run_sweep(days))
                     elif cmd in ("/help", "/start", "help"):
-                        await notify.send(self.session, "Commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the website's since-last-reset P/L count for a strategy (history is kept; Telegram reports are not affected)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/check COIN: the bot's verdict on any coin (paste its contract address, a Fomo or DexScreener link, or $TICKER)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/events: upcoming speeches, summits and signings, and the coins that could move\n/experiments: each test copy of Main against Main over the same days\n/winscore: what the win-score model has learned (chance of +40% before -30%)\n/ai: the AI trader: judges coins like a person, with its reasons and results\n/pick COIN: have the AI trader judge one of your own ideas (it buys on paper if it agrees)\n/own COIN AMOUNT CAP: watch a coin you really hold (e.g. /own SI 1800 29M); /own alone shows them\n/target COIN 50M 100M: alert when it reaches these caps\n/unown COIN: stop watching it\n/holdtest: replay the Hold bot's rules on months of price history (about 10 min)\n/hold: the Hold bot: $300 paper bets on established coins, held for days\n/playbook: how the Fomo traders who make money trade (hold times, exits, skill or luck)\n/bounce: can the bot tell a shake-out from a real dump when the stop loss hits\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early\n/publish: push a stats snapshot to GitHub now\n/setup: (send inside a Telegram group with Topics on) sort alerts into topics\n/unsetup: move alerts back to this private chat")
+                        await notify.send(self.session, "Version 2 commands:\n/core: the main engine, trend-following on big liquid coins (its test results and paper trades)\n/ai: the meme sandbox with the AI veto (does the AI's veto help?)\n/own, /target, /unown: guard the coins you really hold\n\nOther commands:\n/status: feed health and open trades\n/today: last 24 hours\n/week: last 7 days\n/all: since the start\n/fomo: what Fomo traders bought in the last 24h (free)\n/scan: full trend scan of your Fomo traders (uses credits)\n/traders: scorecard of your Fomo traders' buys\n/test: replay recorded coins through every rule variation (30 to 60 min; /test 1 = last day only, much faster)\n/testfollow: test the Follow rules on your traders' buys (1 to 2 min)\n/site: link to the live dashboard\n/reset main: restart the website's since-last-reset P/L count for a strategy (history is kept; Telegram reports are not affected)\n/research: what the week's data says about themes, socials and safety\n/fill SYMBOL PRICE: log a real trade to compare with paper (/fills for the summary)\n/check COIN: the bot's verdict on any coin (paste its contract address, a Fomo or DexScreener link, or $TICKER)\n/risk: what the rug-risk model has learned\n/exits: which exit rules sell too early and which save us\n/trends: news, Trump's posts and coins riding them\n/events: upcoming speeches, summits and signings, and the coins that could move\n/experiments: each test copy of Main against Main over the same days\n/winscore: what the win-score model has learned (chance of +40% before -30%)\n/ai: the AI trader: judges coins like a person, with its reasons and results\n/pick COIN: have the AI trader judge one of your own ideas (it buys on paper if it agrees)\n/own COIN AMOUNT CAP: watch a coin you really hold (e.g. /own SI 1800 29M); /own alone shows them\n/target COIN 50M 100M: alert when it reaches these caps\n/unown COIN: stop watching it\n/holdtest: replay the Hold bot's rules on months of price history (about 10 min)\n/hold: the Hold bot: $300 paper bets on established coins, held for days\n/playbook: how the Fomo traders who make money trade (hold times, exits, skill or luck)\n/bounce: can the bot tell a shake-out from a real dump when the stop loss hits\n/moonshots: what coins that went 10x-50x looked like early\n/trench: on-chain wallets that keep catching moonshots early\n/publish: push a stats snapshot to GitHub now\n/setup: (send inside a Telegram group with Topics on) sort alerts into topics\n/unsetup: move alerts back to this private chat")
                     elif cmd.startswith("/"):
                         await notify.send(self.session, "I don't know %s. Send /help for the list. (If a new command doesn't work, run: gatekeeper update)" % html.escape(cmd[:40]))
                 notify.REPLY.set(None)
@@ -984,7 +1003,7 @@ class Runner:
             await asyncio.gather(
                 fomo.Feed(self.con, self.on_fomo_alert, self.track_coin, self.on_trader_sell).run(),
                 pumpportal_stream(self.on_event, config.PUMPPORTAL_API_KEY),
-                self.poll_loop(), self.fast_loop(), self.safety_loop(), self.risk_backfill(), self.trends.loop(), self.events.loop(), self.hold.loop(), self.analyst.loop(), self.guard.loop(), self.trench.loop(), stats.loop(self), self.telegram_loop(), self.daily_loop(), self.scorecard_loop())
+                self.poll_loop(), self.fast_loop(), self.safety_loop(), self.risk_backfill(), self.trends.loop(), self.events.loop(), self.hold.loop(), self.analyst.loop(), self.guard.loop(), self.core.loop(), self.trench.loop(), stats.loop(self), self.telegram_loop(), self.daily_loop(), self.scorecard_loop())
 
 
 def main():

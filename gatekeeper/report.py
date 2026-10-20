@@ -12,7 +12,7 @@ from .notify import money
 from .strategy import summarize
 
 TZ = ZoneInfo(config.TIMEZONE)
-LABEL = {"main": "Main", "wide": "Wide (newer coins, looser)", "follow": "Follow (copies your Fomo traders)", "momentum": "Momentum (day-trader style)", "survivor": "Survivor (4h+ coins climbing steadily)", "moonshot": "Moonshot Hunter ($20 bets on early 10x signs)",
+LABEL = {"sandbox": "Meme sandbox (no AI veto)", "main": "Main", "wide": "Wide (newer coins, looser)", "follow": "Follow (copies your Fomo traders)", "momentum": "Momentum (day-trader style)", "survivor": "Survivor (4h+ coins climbing steadily)", "moonshot": "Moonshot Hunter ($20 bets on early 10x signs)",
          "x_all40": "Test: sell all at +40%", "x_trail10": "Test: tighter lock (10% trail)", "x_skip35": "Test: stricter rug skip (35%)", "x_noinsider": "Test: no insider rule", "x_insider1": "Test: skip if any insider wallet is in", "x_scalp20": "Test: quick scalp, sell all at +20%", "x_scalp30": "Test: quick scalp, sell all at +30%", "x_winscore": "Test: only buys high win scores", "x_aggro": "Smart aggressive", "x_swing": "Swing (holds for days)", "x_stop40": "Test: wider stop loss (-40%)", "x_stopwait": "Test: stop waits 3 minutes", "x_age60": "Test: buys from 60 minutes old", "x_best": "Best of: stop -40% and pool $15K+", "x_strength": "Strength: buyers in control (from the Oct 7 study)", "x_strength2": "Strength 2: real-money trades only, with Main's rug protections", "x_runner": "Runner: half at +30%, the rest rides a 25% trail"}
 
 
@@ -79,7 +79,10 @@ def rules_changed(con, name):
 def other_bots_lines(con):
     """One line each for the bots that keep their own books (they are not in the numbers above)."""
     out = []
-    for table, label in (("hold_trades", "Hold bot ($300, established coins)"), ("ai_trades", "AI trader")):
+    bots = [("ai_trades", "Meme sandbox WITH the AI veto (the AI trader)")]
+    if config.os.environ.get("GK_HOLD_ON", "0") == "1":
+        bots.insert(0, ("hold_trades", "Hold bot ($300, established coins)"))
+    for table, label in bots:
         try:
             c = con.execute("SELECT COUNT(*) n, COALESCE(SUM(pnl_usd),0) p, COALESCE(SUM(pnl_usd>0),0) w FROM %s WHERE closed_at IS NOT NULL" % table).fetchone()
             o = con.execute("SELECT COUNT(*) n FROM %s WHERE closed_at IS NULL" % table).fetchone()["n"]
@@ -117,7 +120,7 @@ def period_text(con, hours=24, header=True):
     ob = other_bots_lines(con)
     if ob:
         out += ["", "<b>Other paper bots</b> (own books, not counted above)"] + ob
-    main_now = len(_closed(con, rules_changed(con, "main") or None, "main"))
+    main_now = len(_closed(con, rules_changed(con, "main") or None, "main")) if "main" in config.ENABLED_PRESETS else 100
     if main_now < 100:
         out.append("\nMain under its current rules: %d closed trades of the 100 needed before judging them." % main_now)
     return "\n".join(out)

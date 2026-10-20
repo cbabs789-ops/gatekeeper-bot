@@ -268,6 +268,10 @@ class Hold:
                 notify.dex_link(c["mint"], "solana")))
 
     async def loop(self):
+        # Retired Oct 20 (version 2): the Hold test replayed these rules on months of history and they lost money.
+        # The class stays because the Hold test uses its coin scan. GK_HOLD_ON=1 turns the bot back on.
+        if os.environ.get("GK_HOLD_ON", "0") != "1":
+            return
         await asyncio.sleep(150)
         every = _env("MIN", 5)
         n = 0

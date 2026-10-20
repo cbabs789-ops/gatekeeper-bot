@@ -407,14 +407,17 @@ class Analyst:
             new_stop = t["entry_price"] * (1 + _n(d.get("stop_vs_entry_pct"), None) / 100)
         except (TypeError, ValueError):
             new_stop = 0
-        if t["stop_price"] < new_stop < price * 0.97:          # a stop only ever moves up, and stays under the price
+        # a stop only ever moves up, and stays at least 12% under the price: it kept tightening to a few percent and
+        # getting shaken out ($CATE three times in a row, Oct 18-20)
+        if t["stop_price"] < new_stop < price * 0.88:
             self.con.execute("UPDATE ai_trades SET stop_price=? WHERE id=?", (new_stop, t["id"]))
 
-    async def on_main_buy(self, pos):
-        """Main just bought this coin: get the AI's second opinion (and its own trade if it agrees)."""
+    async def on_main_buy(self, pos, source="main"):
+        """A rule-based bot just bought this coin: get the AI's verdict (and its own trade if it agrees).
+        Version 2: the meme sandbox's buys come here, and the AI's trades on them are the 'with AI veto' record."""
         try:
             chain = "robinhood" if str(pos.mint).startswith("0x") else "solana"
-            await self.consider(pos.mint, chain, "main", extra="Context: the rule-based bot just bought this coin. Its reasons: %s" % (pos.why or "")[:400])
+            await self.consider(pos.mint, chain, source, extra="Context: the rule-based bot just bought this coin. Its reasons: %s" % (pos.why or "")[:400])
         except Exception:  # noqa: BLE001
             log.exception("AI review of a Main buy failed")
 
@@ -437,7 +440,7 @@ class Analyst:
             try:
                 if self.key:
                     await self.manage(now)
-                    if n % 15 == 0:            # every 15 min: judge up to 3 established coins from the Hold bot's watchlist
+                    if n % 15 == 0 and os.environ.get("GK_AI_HOLD_REVIEWS", "0") == "1":   # retired Oct 20 with the slow lane
                         # Oct 12: every watchlist coin, not only the ones already climbing. A person can buy a dip in an
                         # intact uptrend; the Hold bot's fixed rule can't. Each coin is looked at again after 6 hours.
                         watch = getattr(getattr(self.r, "hold", None), "watch", {}) or {}
@@ -476,7 +479,7 @@ class Analyst:
         if closed:
             wins = sum(1 for t in closed if t["pnl_usd"] > 0)
             L.append("\nClosed: %d trades · %d%% win · $%+.2f" % (len(closed), wins * 100 // len(closed), sum(t["pnl_usd"] for t in closed)))
-            for src, name in (("main", "coins Main also bought"), ("hold", "established coins"), ("pick", "your picks")):
+            for src, name in (("sandbox", "coins the meme sandbox flagged"), ("main", "coins Main also bought"), ("hold", "established coins"), ("pick", "your picks")):
                 ts = [t for t in closed if t["source"] == src]
                 if ts:
                     L.append("  %s: %d trades · $%+.2f" % (name, len(ts), sum(t["pnl_usd"] for t in ts)))
@@ -486,15 +489,15 @@ class Analyst:
             L.append("\nNo closed trades yet.")
         # the second-opinion scorecard: what happened to Main's buys the AI agreed with vs passed on
         agree, passed = [], []
-        for rv in con.execute("SELECT mint, decision, ts FROM ai_reviews WHERE source='main'"):
-            m = con.execute("SELECT pnl_usd FROM trades WHERE mode='live' AND COALESCE(run_id,'main')='main' AND mint=? AND closed_at IS NOT NULL "
+        for rv in con.execute("SELECT mint, decision, ts FROM ai_reviews WHERE source='sandbox'"):
+            m = con.execute("SELECT pnl_usd FROM trades WHERE mode='live' AND COALESCE(run_id,'main')='sandbox' AND mint=? AND closed_at IS NOT NULL "
                                  "AND opened_at BETWEEN ? AND ?", (rv["mint"], rv["ts"] - 10 * MIN, rv["ts"] + 10 * MIN)).fetchone()
             if m and m["pnl_usd"] is not None:
                 (agree if rv["decision"] == "buy" else passed).append(m["pnl_usd"])
         if agree or passed:
-            L.append("\n<b>Second opinion on Main's buys</b> (Main's own result on each)")
-            L.append("AI said buy: %d trades · Main made $%+.2f on them" % (len(agree), sum(agree)))
-            L.append("AI said pass: %d trades · Main made $%+.2f on them" % (len(passed), sum(passed)))
+            L.append("\n<b>Does the AI's veto help?</b> (the meme sandbox's own result on each coin it bought)")
+            L.append("AI agreed: %d trades · sandbox made $%+.2f on them" % (len(agree), sum(agree)))
+            L.append("AI vetoed: %d trades · sandbox made $%+.2f on them (a loss here is money the veto saved)" % (len(passed), sum(passed)))
         opens = self.open_trades(con)
         if opens:
             L.append("\n<b>Holding now</b>")

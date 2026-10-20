@@ -59,6 +59,7 @@ def build(r, con=None, trench_text=None):
     safe("ai", lambda: r.analyst.text(con) if getattr(r, "analyst", None) else "")
     safe("hold", lambda: r.hold.text(con) if getattr(r, "hold", None) else "")
     safe("holdtest", lambda: holdtest.saved_text(con))
+    safe("core", lambda: r.core.text(con) if getattr(r, "core", None) else "")
     safe("guard", lambda: r.guard.summary(con) if getattr(r, "guard", None) else "")
     safe("moonshots", lambda: risk.moonshots_text(con))
     safe("traders", lambda: fomo.scorecard_text(con))
@@ -79,7 +80,7 @@ def build(r, con=None, trench_text=None):
     data = {"generated": int(time.time() * 1000), "generated_local": now.strftime("%Y-%m-%d %H:%M %Z"),
             "strategies": list(r.strats), "epochs": getattr(r, "epochs", {}), "open": open_, "closed_recent": closed,
             "rug_model": {k: v for k, v in (r.rug_model or {}).items() if k != "counts"}, "reports": parts}
-    order = ["settings", "status", "today", "week", "experiments", "ai", "hold", "holdtest", "guard", "exits", "winscore", "bounce", "risk", "moonshots", "traders", "playbook", "trench", "research", "trends", "news", "events"]
+    order = ["settings", "status", "core", "today", "week", "ai", "guard", "holdtest", "hold", "experiments", "exits", "winscore", "bounce", "risk", "moonshots", "traders", "playbook", "trench", "research", "trends", "news", "events"]
     md = ["# Gatekeeper stats: %s" % data["generated_local"], "",
           "Open paper trades: %d in Main/Follow, %d in experiment bots (Hold bot and AI trader are listed in their own sections) · running: %s" % (
               sum(1 for o in open_ if o["strategy"] not in config.SHADOW), sum(1 for o in open_ if o["strategy"] in config.SHADOW),
