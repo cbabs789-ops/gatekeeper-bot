@@ -207,9 +207,11 @@ SHADOW = {
                 "BREAKEVEN_AT_PCT": 40, "MAX_HOLD_MIN": 10080, "ADAPTIVE_TARGETS": 0,
                 "SELL_PRESSURE_EXIT": 0},      # a 5-minute burst of selling is noise on a multi-day hold,
 }
-SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES", "").split(",") if x.strip() in SHADOW]
+SHADOW_PRESETS = [x.strip() for x in os.environ.get("GK_SHADOW_STRATEGIES_V2", "").split(",") if x.strip() in SHADOW]
 ALERT_PRESETS = [x.strip() for x in os.environ.get("GK_ALERT_STRATEGIES", "main,wide,follow").split(",") if x.strip()]
-ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES", "sandbox").split(",") if x.strip() in PRESETS]
+# Version 2 (Oct 20): new setting names, so an old GK_STRATEGIES line in the server's config file can't bring back the
+# retired bots (that's what happened on the first day).
+ENABLED_PRESETS = [x.strip() for x in os.environ.get("GK_STRATEGIES_V2", "sandbox").split(",") if x.strip() in PRESETS]
 
 
 def _num(default, raw):

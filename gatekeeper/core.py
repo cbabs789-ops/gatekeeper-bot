@@ -6,7 +6,8 @@ trip) and the rugs eat everything. Big liquid coins cost well under 1% to trade,
 daily prices to test on before a single paper trade.
 
 How it works:
-  1. Download up to ~2.7 years of daily candles for each coin (GeckoTerminal, free).
+  1. Download about 2 years (720 days) of daily candles for each coin from Kraken's free public API.
+     (GeckoTerminal was used first, but its free history stops at about 180 days: too short for a 100-day rule.)
   2. Replay five simple, well-known trend rules, decided BEFORE looking at any result, on that history.
   3. Pick the rule using ONLY the older half of the history. Report what that rule then did on the newer half,
      next to simply buying and holding the same coins. That newer-half number is the honest score.
@@ -23,22 +24,16 @@ from datetime import datetime, timezone
 import aiohttp
 
 from . import db, notify
-from .sources import DexFailed, dexscreener_batch
 
 log = logging.getLogger("gatekeeper.core")
 DAY = 86400000
 SLEEVE, COST = 1000.0, 0.005
-COINS = [  # (symbol, Solana token address)
-    ("SOL", "So11111111111111111111111111111111111111112"),
-    ("BTC", "cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij"),
-    ("ETH", "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs"),
-    ("JUP", "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"),
-    ("BONK", "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263"),
-    ("WIF", "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm"),
-    ("POPCAT", "7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr"),
+COINS = [  # (symbol, Kraken pair)
+    ("SOL", "SOLUSD"), ("BTC", "XBTUSD"), ("ETH", "ETHUSD"), ("JUP", "JUPUSD"),
+    ("BONK", "BONKUSD"), ("WIF", "WIFUSD"), ("POPCAT", "POPCATUSD"),
 ]
-POOLS = "https://api.geckoterminal.com/api/v2/networks/solana/tokens/%s/pools?page=1"
-OHLCV = "https://api.geckoterminal.com/api/v2/networks/solana/pools/%s/ohlcv/day?limit=1000&currency=usd&token=%s"
+KRAKEN_OHLC = "https://api.kraken.com/0/public/OHLC?pair=%s&interval=1440"
+KRAKEN_TICKER = "https://api.kraken.com/0/public/Ticker?pair=%s"
 RULES = [  # decided before any test was run; classic, widely published trend rules
     ("avg50", "Hold while the price is above its 50-day average"),
     ("avg100", "Hold while the price is above its 100-day average"),
@@ -175,7 +170,7 @@ class Core:
         self.r = runner
         self.con = runner.con
         self.con.executescript(SCHEMA)
-        self.pools = {}
+        self.missing = []
 
     async def _get(self, url):
         for attempt in range(3):
@@ -190,28 +185,30 @@ class Core:
                 await asyncio.sleep(3)
         return None
 
+    @staticmethod
+    def _kraken_rows(data):
+        """Kraken answers {"error": [], "result": {"<its pair name>": [...], "last": ...}}; the pair name varies (XXBTZUSD)."""
+        if not data or data.get("error"):
+            return None
+        res = data.get("result") or {}
+        vals = [v for k, v in res.items() if k != "last"]
+        return vals[0] if vals else None
+
     async def download(self):
         """Refresh daily candles for every coin. Returns {sym: [(ts,o,h,l,c)]} with yesterday's candle as the last one."""
-        for sym, mint in COINS:
-            if sym not in self.pools:
-                data = await self._get(POOLS % mint)
-                best = None
-                for p in (data or {}).get("data") or []:
-                    a = p.get("attributes") or {}
-                    liq = float(a.get("reserve_in_usd") or 0)
-                    if not best or liq > best[0]:
-                        best = (liq, a.get("address"))
-                if best and best[1]:
-                    self.pools[sym] = best[1]
-                await asyncio.sleep(2.5)
-            if sym not in self.pools:
-                log.info("Core: no pool found for %s", sym)
+        if not db.kv_get(self.con, "core_src_kraken"):
+            self.con.execute("DELETE FROM core_candles")          # drop the short GeckoTerminal history from the first day
+            db.kv_set(self.con, "core_src_kraken", 1)
+        self.missing = []
+        for sym, pair in COINS:
+            rows = self._kraken_rows(await self._get(KRAKEN_OHLC % pair))
+            if not rows:
+                self.missing.append(sym)
+                log.info("Core: no Kraken history for %s", sym)
                 continue
-            data = await self._get(OHLCV % (self.pools[sym], mint))
-            rows = (((data or {}).get("data") or {}).get("attributes") or {}).get("ohlcv_list") or []
             self.con.executemany("INSERT OR REPLACE INTO core_candles VALUES(?,?,?,?,?,?)",
                                  [(sym, int(x[0]) * 1000, float(x[1]), float(x[2]), float(x[3]), float(x[4])) for x in rows if float(x[4] or 0) > 0])
-            await asyncio.sleep(2.5)
+            await asyncio.sleep(1.5)
         return self.load()
 
     def load(self, con=None):
@@ -251,15 +248,19 @@ class Core:
         data = self.load()
         if not rule or not data:
             return
-        prices = await dexscreener_batch(self.r.session, [m for _, m in COINS], "solana")
-        if isinstance(prices, DexFailed):
-            return                                  # try again next hour
+        # one ticker call per coin: Kraken rejects a whole multi-coin request if any one pair name is unknown
         now = int(time.time() * 1000)
         held = {t["sym"]: t for t in self.open_trades()}
-        for sym, mint in COINS:
+        for sym, pair in COINS:
             k = data.get(sym)
-            pair = prices.get(mint) or {}
-            px = float(pair.get("priceUsd") or 0)
+            if not k:
+                continue
+            hit = self._kraken_rows(await self._get(KRAKEN_TICKER % pair)) or {}   # same answer shape as the candles
+            try:
+                px = float(hit.get("c", [0])[0] or 0)
+            except (TypeError, ValueError, AttributeError):
+                px = 0.0
+            mint = pair
             if not k or not px:
                 continue
             closes = [x[4] for x in k]
@@ -306,6 +307,8 @@ class Core:
         if not res:
             return L[0] + "\nFirst history download and test haven't finished yet (a few minutes after the bot starts)."
         f = lambda ms: datetime.fromtimestamp(ms / 1000, timezone.utc).strftime("%b %-d %Y")  # noqa: E731
+        if getattr(self, "missing", None):
+            L.append("No Kraken history for: %s (left out)." % ", ".join(self.missing))
         L.append("Tested on %s to %s (%d coins). Rule picked on the older half only; the newer half (from %s) is the honest score.\n" % (
             f(res["start"]), f(res["end"]), len(res["coins"]), f(res["mid"])))
         L.append("Rule: return older half / newer half · worst drop from a high (newer half) · trades")
