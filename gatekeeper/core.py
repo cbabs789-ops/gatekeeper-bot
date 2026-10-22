@@ -28,6 +28,7 @@ from . import db, notify
 log = logging.getLogger("gatekeeper.core")
 DAY = 86400000
 SLEEVE, COST = 1000.0, 0.005
+EVAL_VERSION = "2-kraken"
 COINS = [  # (symbol, Kraken pair)
     ("SOL", "SOLUSD"), ("BTC", "XBTUSD"), ("ETH", "ETHUSD"), ("JUP", "JUPUSD"),
     ("BONK", "BONKUSD"), ("WIF", "WIFUSD"), ("POPCAT", "POPCATUSD"),
@@ -285,9 +286,13 @@ class Core:
         while True:
             try:
                 now = datetime.now(timezone.utc)
-                if not self.result() or (now.weekday() == 6 and now.hour == 1 and db.kv_get(self.con, "core_rebuilt") != now.strftime("%Y-%m-%d")):
+                # EVAL_VERSION: bump it whenever the test itself changes, so the stored result is redone at once
+                # (the Kraken switch on Oct 21 waited for Sunday because of this)
+                stale = db.kv_get(self.con, "core_eval_version") != EVAL_VERSION
+                if stale or not self.result() or (now.weekday() == 6 and now.hour == 1 and db.kv_get(self.con, "core_rebuilt") != now.strftime("%Y-%m-%d")):
                     await self.rebuild(announce=bool(self.result()))
                     db.kv_set(self.con, "core_rebuilt", now.strftime("%Y-%m-%d"))
+                    db.kv_set(self.con, "core_eval_version", EVAL_VERSION)
                 day = now.strftime("%Y-%m-%d")
                 if now.hour >= 0 and now.minute >= 10 and last_day != day:
                     await self.download()           # yesterday's candle is final now
