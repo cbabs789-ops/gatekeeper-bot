@@ -125,7 +125,9 @@ PRESETS = {
     # trader, which only takes the trade if it agrees. Comparing the two answers one question: does the AI's veto help?
     "sandbox": {"ENTRY_MODE": "strength", "MIN_AGE_MIN": 120, "MAX_AGE_MIN": 300, "MIN_LIQ_USD": 20000, "MIN_M5_TXNS": 60,
                 "STR_MIN_AVG_TRADE": 20, "MAX_TOP10_PCT": 20, "RISK_SKIP": 35, "INSIDER_SKIP": 2,
-                "TAKE_PROFIT_PCT": 40, "STOP_LOSS_PCT": 30, "MAX_HOLD_MIN": 720, "MAX_OPEN": 8,
+                # Oct 27: switched off (MAX_OPEN 0 = it never buys). One week: 33 trades, 42% wins, -$580, four rugs; the AI
+                # vetoed all 33. Coin data keeps being recorded for the research reports. GK_SANDBOX_MAX_OPEN=8 turns it back on.
+                "TAKE_PROFIT_PCT": 40, "STOP_LOSS_PCT": 30, "MAX_HOLD_MIN": 720, "MAX_OPEN": 0,
                 "LOCK_START_PCT": 0, "BREAKEVEN_AT_PCT": 0, "SELL_PRESSURE_EXIT": 0, "LIQ_DRAIN_PCT": 15,
                 "RISK_SIZING": 0, "ADAPTIVE_TARGETS": 0, "WIN_FILTER": 0, "POSITION_USD": 100},
     # looser rules on the same coins; trades silently so it reaches 100 trades faster
