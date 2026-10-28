@@ -267,6 +267,60 @@ async def positions_text(session, con, arg):
     return "\n".join(L)
 
 
+def trades_text(con, arg):
+    """/trades NAME [NAME...] [COIN]: every buy and sell these Fomo accounts made, from the live feed the bot records
+    (free, kept for 30 days). Transfers between wallets aren't trades, so they don't show here."""
+    ensure_schema(con)
+    parts = [x.strip().lstrip("@$") for x in (arg or "").split() if x.strip()]
+    if not parts:
+        return "Send /trades followed by Fomo usernames and a coin, e.g. /trades cbabs789 rose060 SI"
+    coin = next((x for x in parts if x.isupper() and len(x) <= 10), None)
+    handles = [x for x in parts if x != coin][:4] or parts[:1]
+    first = con.execute("SELECT MIN(ts) t FROM fomo_events").fetchone()["t"]
+    L = ["🧾 <b>Fomo trades</b>%s (from the live feed the bot has recorded since %s)" % (
+        " in $" + coin if coin else "", time.strftime("%b %-d", time.localtime(first / 1000)) if first else "?")]
+    grand_in, grand_pnl = 0.0, 0.0
+    for h in handles:
+        q = "SELECT ts, side, token, usd, raw FROM fomo_events WHERE LOWER(trader)=LOWER(?)" + (" AND UPPER(token)=?" if coin else "") + " ORDER BY ts"
+        rows = con.execute(q, (h, coin) if coin else (h,)).fetchall()
+        L.append("\n<b>@%s</b>: %d trades" % (html.escape(h), len(rows)))
+        bought, pnl = 0.0, 0.0
+        for r in rows[-40:]:
+            try:
+                m = json.loads(r["raw"] or "{}")
+            except ValueError:
+                m = {}
+            when = time.strftime("%b %-d %-I:%M %p", time.localtime(r["ts"] / 1000))
+            if r["side"] == "buy":
+                usd = _num(m.get("tradeUsd")) or r["usd"] or 0
+                L.append("%s · bought $%s · %s" % (when, html.escape(r["token"] or "?"), money(usd)))
+            else:
+                rp = _num(m.get("realizedPnlUsd"))
+                rp = r["usd"] if rp is None else rp
+                L.append("%s · sold $%s · locked in %s%s" % (when, html.escape(r["token"] or "?"), money(rp),
+                                                             (" (left in the position: %s)" % money(_num(m.get("positionValueUsd")))) if _num(m.get("positionValueUsd")) is not None else ""))
+        for r in rows:
+            try:
+                m = json.loads(r["raw"] or "{}")
+            except ValueError:
+                m = {}
+            if r["side"] == "buy":
+                bought += _num(m.get("tradeUsd")) or r["usd"] or 0
+            else:
+                rp = _num(m.get("realizedPnlUsd"))
+                pnl += r["usd"] if rp is None else rp
+        if len(rows) > 40:
+            L.insert(len(L) - 40, "(showing the last 40)")
+        L.append("Total bought: %s · profit or loss locked in by selling: %s" % (money(bought), money(pnl)))
+        grand_in += bought
+        grand_pnl += pnl
+    if len(handles) > 1:
+        L.append("\n<b>Together</b>: bought %s · locked in %s" % (money(grand_in), money(grand_pnl)))
+    L.append("\nOnly trades made through Fomo in the last 30 days show up. Transfers between wallets and buys older than "
+             "that don't. For anything older, Fomo's own trade history in the app is the record.")
+    return "\n".join(L)
+
+
 async def _payouts(session, coin, addr, value, paid):
     """What the whole position would be worth at each market cap: value now x (cap / cap now)."""
     from . import check
