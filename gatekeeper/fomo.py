@@ -216,6 +216,9 @@ async def positions_text(session, con, arg):
     """/positions HANDLE [COIN]: a Fomo account's open positions (public on Fomo), e.g. /positions cbabs789 SI.
     Several handles can be given: /positions cbabs789 rose060 SI. Costs 250 API credits per account."""
     parts = [x.strip().lstrip("@$") for x in (arg or "").split() if x.strip()]
+    # an optional number is what you really paid in total, e.g. /positions cbabs789 rose060 SI 4300
+    paid = next((float(x.replace(",", "")) for x in parts if re.fullmatch(r"[\d,]+(\.\d+)?", x)), None)
+    parts = [x for x in parts if not re.fullmatch(r"[\d,]+(\.\d+)?", x)]
     if not parts:
         return "Send /positions followed by a Fomo username, e.g. /positions cbabs789 SI (add a coin to show just that coin)."
     handles = [x for x in parts if not (x.isupper() and len(x) <= 10)] or parts[:1]
@@ -224,6 +227,7 @@ async def positions_text(session, con, arg):
         handles.remove(coin)
     c = Client(session, con)
     L, tot_cost, tot_val, raw_note = ["👛 <b>Fomo positions</b>%s" % (" for $" + coin if coin else "")], 0.0, 0.0, None
+    addr = None
     for h in handles[:4]:
         try:
             resp = await c.get("/v2/users/%s/positions" % h)
@@ -252,11 +256,44 @@ async def positions_text(session, con, arg):
                 bits.append("already taken %s" % money(p["realized"]))
             if p["amount"]:
                 bits.append("%s tokens" % format(round(p["amount"]), ","))
+            if coin and p.get("address"):
+                addr = p["address"]
             L.append(" · ".join(bits))
     if len(handles) > 1 and (tot_cost or tot_val):
         L.append("\n<b>Together</b>: put in %s · worth %s now" % (money(tot_cost), money(tot_val)))
+    if coin and tot_val > 0:
+        L += await _payouts(session, coin, addr, tot_val, paid)
     L.append("\nFomo's 'put in' for coins that were transferred in is the value on the day they arrived, not what was paid.")
     return "\n".join(L)
+
+
+async def _payouts(session, coin, addr, value, paid):
+    """What the whole position would be worth at each market cap: value now x (cap / cap now)."""
+    from . import check
+    from .sources import dexscreener_batch
+    pair = None
+    try:
+        if addr:
+            pair = (await dexscreener_batch(session, [addr], "solana")).get(addr)
+        if not pair:
+            _, _, pair, _ = await check.resolve(session, coin)
+    except Exception:  # noqa: BLE001
+        pair = None
+    cap = float((pair or {}).get("marketCap") or (pair or {}).get("fdv") or 0)
+    if not cap:
+        return ["\nCouldn't read $%s's market cap right now, so no payout table. Try again in a few minutes." % html.escape(coin)]
+    km = lambda x: "$%.2fB" % (x / 1e9) if x >= 1e9 else "$%.1fM" % (x / 1e6)  # noqa: E731
+    L = ["\n<b>Payout for the whole position</b> ($%s is at a %s cap, so you hold about %s per $1M of cap)" % (
+        html.escape(coin), km(cap), money(value / cap * 1e6))]
+    if paid:
+        be = paid / value * cap
+        L.append("You paid %s in total, so your real break-even is a %s cap." % (money(paid), km(be)))
+    targets = sorted({t for t in (15e6, 20e6, 25e6, 50e6, 75e6, 100e6, 150e6, 250e6, 500e6, 1e9)} | ({round(paid / value * cap, -5)} if paid else set()))
+    for t in targets:
+        v = value * t / cap
+        L.append("%s cap → %s%s" % (km(t), money(v), ((" (%s profit)" % money(v - paid)) if v >= paid else (" (%s loss)" % money(paid - v))) if paid else ""))
+    L.append("Leaves out selling costs and assumes the supply stays the same.")
+    return L
 
 
 def parse_following(resp):
