@@ -12,6 +12,7 @@ Free plan: 250,000 credits a month. Positions and following cost 250 each.
 Looking up a trader's wallets costs 2,500, so we avoid it.
 """
 import asyncio
+import html
 import json
 import logging
 import re
@@ -204,9 +205,58 @@ def parse_positions(resp):
                 "unrealized": _num(_first(p, "unrealizedPnl", "unrealizedPnlUsd", "pnl.unrealized")) or 0.0,
                 "cost": _num(_first(p, "costBasisUsd", "costBasis", "costUsd", "entryUsd", "invested", "boughtUsd")),
                 "thesis": _first(p, "thesis", default=None),
+                "amount": _num(_first(p, "amount", "balance", "tokenAmount", "quantity", "qty", "tokens", "size")),
+                "value": _num(_first(p, "valueUsd", "currentValueUsd", "positionValueUsd", "value", "marketValueUsd", "currentValue")),
                 "opened": _first(p, "openedAt", "entryAt", "firstBuyAt", "createdAt"),
             })
     return out
+
+
+async def positions_text(session, con, arg):
+    """/positions HANDLE [COIN]: a Fomo account's open positions (public on Fomo), e.g. /positions cbabs789 SI.
+    Several handles can be given: /positions cbabs789 rose060 SI. Costs 250 API credits per account."""
+    parts = [x.strip().lstrip("@$") for x in (arg or "").split() if x.strip()]
+    if not parts:
+        return "Send /positions followed by a Fomo username, e.g. /positions cbabs789 SI (add a coin to show just that coin)."
+    handles = [x for x in parts if not (x.isupper() and len(x) <= 10)] or parts[:1]
+    coin = next((x for x in parts if x.isupper() and len(x) <= 10), None)
+    if coin and coin in handles:
+        handles.remove(coin)
+    c = Client(session, con)
+    L, tot_cost, tot_val, raw_note = ["👛 <b>Fomo positions</b>%s" % (" for $" + coin if coin else "")], 0.0, 0.0, None
+    for h in handles[:4]:
+        try:
+            resp = await c.get("/v2/users/%s/positions" % h)
+        except Exception as e:  # noqa: BLE001
+            L.append("\n@%s: couldn't read it (%s)" % (html.escape(h), html.escape(str(e)[:120])))
+            continue
+        rows = [p for p in parse_positions(resp) if p["status"] != "closed" and (not coin or p["symbol"].upper() == coin)]
+        L.append("\n<b>@%s</b>" % html.escape(h))
+        if not rows:
+            L.append("No open positions%s." % (" in $" + coin if coin else ""))
+            if raw_note is None:
+                raw_note = json.dumps(resp)[:300]
+            continue
+        for p in rows[:15]:
+            val = p["value"] if p["value"] is not None else ((p["cost"] or 0) + (p["unrealized"] or 0) if p["cost"] is not None else None)
+            bits = ["$%s" % html.escape(p["symbol"])]
+            if p["cost"] is not None:
+                bits.append("put in %s" % money(p["cost"]))
+                tot_cost += p["cost"]
+            if val is not None:
+                bits.append("worth %s" % money(val))
+                tot_val += val
+            if p["unrealized"]:
+                bits.append("open profit %s" % money(p["unrealized"]))
+            if p["realized"]:
+                bits.append("already taken %s" % money(p["realized"]))
+            if p["amount"]:
+                bits.append("%s tokens" % format(round(p["amount"]), ","))
+            L.append(" · ".join(bits))
+    if len(handles) > 1 and (tot_cost or tot_val):
+        L.append("\n<b>Together</b>: put in %s · worth %s now" % (money(tot_cost), money(tot_val)))
+    L.append("\nFomo's 'put in' for coins that were transferred in is the value on the day they arrived, not what was paid.")
+    return "\n".join(L)
 
 
 def parse_following(resp):
